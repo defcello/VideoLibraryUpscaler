@@ -1,0 +1,34 @@
+{# Standalone script (run directly with the portable python.exe, not via
+   VSPipe) that field-matches a sample of frames with VIVTC's VFM and reports
+   how much combing remains afterward. If the source really is a 3:2
+   telecined film, VFM should resolve almost all of it -- a high leftover
+   combed fraction means either the wrong field order or that this isn't
+   telecine at all (e.g. true interlaced, or a "fake interlaced" source per
+   the guide's warning). Prints one JSON line to stdout. #}
+{% include "_plugins.vpy.j2" %}
+
+import json
+
+clip = core.lsmas.LWLibavSource(r"{{ source_path }}")
+
+total = clip.num_frames
+sample_n = min({{ sample_frames }}, total)
+start = max(0, (total - sample_n) // 2)  # sample from the middle, past any black/logo intro
+
+clip = clip[start:start + sample_n]
+matched = core.vivtc.VFM(clip, order={{ 1 if tff else 0 }}, mode=1)
+
+combed = 0
+checked = 0
+for i in range(matched.num_frames):
+    f = matched.get_frame(i)
+    checked += 1
+    if f.props.get("_Combed", 0):
+        combed += 1
+
+result = {
+    "checked_frames": checked,
+    "combed_after_vfm": combed,
+    "combed_after_vfm_frac": (combed / checked) if checked else None,
+}
+print("PROBE_RESULT:" + json.dumps(result))

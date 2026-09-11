@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Remaster Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+    <h1>AI Remaster Pipeline</h1>
+    <span class="sub" id="worker-status">worker: idle</span>
+</header>
+
+<main>
+    <section class="panel">
+        <h2>Submit</h2>
+        <div class="browse-path" id="browse-path">loading...</div>
+        <div class="browse-list" id="browse-list"></div>
+
+        <div class="field">
+            <label>Selected files</label>
+            <div id="selected-count" style="font-size:13px;color:var(--text-dim)">none selected</div>
+        </div>
+
+        <div class="field">
+            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Denoise (HandBrake NLMeans Strong)</label>
+        </div>
+        <div class="field">
+            <label>Denoise tune</label>
+            <select id="denoise-tune"></select>
+        </div>
+        <div class="field">
+            <label>Topaz preset</label>
+            <select id="topaz-preset"></select>
+        </div>
+
+        <div class="field">
+            <button class="primary" id="submit-btn">Add to queue</button>
+        </div>
+    </section>
+
+    <section class="queue">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:26%">File</th>
+                    <th style="width:12%">Status</th>
+                    <th style="width:24%">Stage</th>
+                    <th style="width:18%">Settings</th>
+                    <th style="width:20%">Updated</th>
+                </tr>
+            </thead>
+            <tbody id="job-rows"></tbody>
+        </table>
+        <div class="empty" id="empty-msg" style="display:none">No jobs yet -- browse and submit files on the left.</div>
+    </section>
+</main>
+
+<div id="detail">
+    <div class="detail-header">
+        <div>
+            <h3 id="detail-title">-</h3>
+            <div class="sub" id="detail-id" style="color:var(--text-dim);font-size:11px"></div>
+        </div>
+        <button class="close-btn" id="detail-close">&times;</button>
+    </div>
+    <div class="detail-body" id="detail-body"></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

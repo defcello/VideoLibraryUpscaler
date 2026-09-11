@@ -1,0 +1,9 @@
+pipeline.db
+pipeline.db-journal
+pipeline.db-wal
+__pycache__/
+*.pyc
+staging/
+logs/
+.venv/
+pipeline.db-shm

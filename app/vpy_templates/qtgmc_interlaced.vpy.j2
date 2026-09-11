@@ -1,0 +1,22 @@
+{# True-interlaced (60i) path: QTGMC bob-deinterlaces every field into its own
+   full frame, preserving all original temporal resolution -- FPSDivisor=1 is
+   the automation equivalent of the guide's "Bob" checkbox, which the guide
+   stresses must be on or you silently lose half your motion data. #}
+{% include "_plugins.vpy.j2" %}
+
+import sys
+sys.path.insert(0, r"{{ vsscripts_dir }}")
+from qtgmc import QTGMC
+
+clip = core.lsmas.LWLibavSource(r"{{ source_path }}")
+
+{% include "_normalize.vpy.j2" %}
+
+clip = QTGMC(
+    clip,
+    Preset="{{ qtgmc_preset | default('Very Slow') }}",
+    TFF={{ "True" if tff else "False" }},
+    FPSDivisor=1,
+)
+
+clip.set_output()

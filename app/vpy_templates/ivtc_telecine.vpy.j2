@@ -1,0 +1,14 @@
+{# Telecined 24p-in-60i path: VIVTC field-matches the 3:2 pulldown pattern
+   back into whole frames (VFM mode=1, matching the guide's "2-way match +
+   3rd match on combed"), then VDecimate drops the resulting duplicate frame
+   per 5-frame cycle to land on clean 23.976p. #}
+{% include "_plugins.vpy.j2" %}
+
+clip = core.lsmas.LWLibavSource(r"{{ source_path }}")
+
+{% include "_normalize.vpy.j2" %}
+
+clip = core.vivtc.VFM(clip, order={{ 1 if tff else 0 }}, mode=1)
+clip = core.vivtc.VDecimate(clip)
+
+clip.set_output()

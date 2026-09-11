@@ -1,0 +1,10 @@
+{# Source already detected as progressive -- no deinterlace/IVTC needed, but
+   still normalize letterbox crop / PAR through the same pipeline stage so
+   every job's Stage 2 output is consistently square-pixel and cropped. #}
+{% include "_plugins.vpy.j2" %}
+
+clip = core.lsmas.LWLibavSource(r"{{ source_path }}")
+
+{% include "_normalize.vpy.j2" %}
+
+clip.set_output()

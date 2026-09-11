@@ -1,0 +1,18 @@
+{
+    "description": "HandBrakeCLI NLMeans tune options for Stage 3 (optional denoise). Chosen once per batch run at job submission until auto-detection exists.",
+    "nlmeans_preset": "strong",
+    "tunes": {
+        "none": {
+            "handbrake_tune": "none",
+            "label": "None (generic NLMeans, no content-specific tuning)"
+        },
+        "film": {
+            "handbrake_tune": "film",
+            "label": "Film (live-action grain handling)"
+        },
+        "animation": {
+            "handbrake_tune": "animation",
+            "label": "Animation (flat color regions, line art)"
+        }
+    }
+}

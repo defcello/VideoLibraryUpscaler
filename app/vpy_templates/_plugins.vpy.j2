@@ -1,0 +1,28 @@
+{# Loads the VapourSynth plugin DLLs reused from the Hybrid install. Each load
+   is wrapped in try/except: a missing/incompatible optional plugin (e.g. a
+   CL/CUDA variant on a machine without that runtime) shouldn't hard-fail a
+   script that never ends up calling it.
+
+   Several plugins (fft3dfilter, dfttest, ...) depend on shared DLLs (fftw3,
+   ...) that live in vsfilters\Support rather than next to the plugin itself,
+   so Windows' default "search the loading DLL's own folder" rule doesn't
+   find them -- we add that folder to the DLL search path explicitly. #}
+import os
+import vapoursynth as vs
+core = vs.core
+
+try:
+    os.add_dll_directory(r"{{ vsfilters_support_dir }}")
+except (FileNotFoundError, OSError):
+    pass
+
+_PLUGINS = {
+{% for namespace, path in vs_plugins.items() %}
+    "{{ namespace }}": r"{{ path }}",
+{% endfor %}
+}
+for _ns, _path in _PLUGINS.items():
+    try:
+        core.std.LoadPlugin(_path)
+    except Exception as _e:
+        print(f"[plugin-load] skipped {_ns} ({_path}): {_e}")

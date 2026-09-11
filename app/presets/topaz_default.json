@@ -1,0 +1,46 @@
+{
+    "description": "Default Topaz Video AI upscale preset, translated from the r/AIRemastered non-generative upscaling guide onto current Topaz Video AI model names (verified against this machine's installed models). Edit freely -- this is meant to be tuned per title/series over time, not treated as gospel.",
+
+    "model": "gcg-5",
+    "model_display_name": "Gaia - Computer Generated",
+
+    "output_tier_height": 1080,
+    "scale_prioritize": "height",
+
+    "tvai_up_params": {
+        "preblur": 0,
+        "noise": 0,
+        "details": 0,
+        "halo": 0,
+        "blur": 0,
+        "compression": 0,
+        "device": -2,
+        "vram": 1.0,
+        "estimate": 0
+    },
+
+    "precleanup": {
+        "enabled": false,
+        "model": "nyx-3",
+        "model_display_name": "Nyx",
+        "params": {
+            "preblur": 0,
+            "noise": 0,
+            "details": 1.0,
+            "halo": 0,
+            "blur": 0,
+            "compression": 0
+        }
+    },
+
+    "encoder": {
+        "codec": "h264_nvenc",
+        "profile": "high",
+        "preset": "p6",
+        "bitrate_mode": "vbr_hq",
+        "cq": 18,
+        "container": "mov",
+        "audio_mode": "copy",
+        "_note": "Topaz's bundled ffmpeg (needed for the tvai_up filter) has no libx264 -- only hardware encoders -- so h264_nvenc is the only option in this same process. Lower cq = higher quality/bigger files."
+    }
+}

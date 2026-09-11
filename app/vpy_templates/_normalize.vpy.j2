@@ -1,0 +1,10 @@
+{# Optional letterbox/pillarbox crop (autodetected upstream via ffmpeg
+   cropdetect) and PAR normalization to square pixels. Native aspect ratio is
+   preserved -- we never pad to force 16:9. #}
+{% if crop_left or crop_right or crop_top or crop_bottom %}
+clip = core.std.CropRel(clip, left={{ crop_left }}, right={{ crop_right }}, top={{ crop_top }}, bottom={{ crop_bottom }})
+{% endif %}
+{% if par_num and par_den and par_num != par_den %}
+_par_w = int(round(clip.width * {{ par_num }} / {{ par_den }} / 2) * 2)
+clip = core.resize.Spline36(clip, width=_par_w, height=clip.height)
+{% endif %}

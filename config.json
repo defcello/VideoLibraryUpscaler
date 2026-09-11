@@ -1,0 +1,52 @@
+{
+    "nas_root": "\\\\StudioNAS\\defcello_media\\Video",
+    "staging_drives": ["R:\\", "Z:\\"],
+    "staging_subdir": "ai-remaster-pipeline\\staging",
+    "staging_free_space_margin_gb": 2.0,
+
+    "tools": {
+        "ffprobe": "C:\\Program Files\\Topaz Labs LLC\\Topaz Video\\ffprobe.exe",
+        "ffmpeg": "C:\\Program Files\\Topaz Labs LLC\\Topaz Video\\ffmpeg.exe",
+        "_comment_ffmpeg": "Topaz's ffmpeg has no libx264/libx265 (no --enable-gpl in its build) -- only hardware encoders (h264_nvenc/hevc_nvenc/amf/qsv/mf). We use h264_nvenc throughout for both the deinterlace-stage mezzanine and the Topaz upscale output, since the RTX 3090 makes this fast and good quality. ffmpeg_libx264 below is a full GPL ffmpeg build (has libx264/libx265) kept as an optional swap-in if you ever want exact software-encode parity with the guide.",
+        "ffmpeg_libx264": "C:\\Users\\SignInColor\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BtbN.FFmpeg.GPL_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-N-123073-g743df5ded9-win64-gpl\\bin\\ffmpeg.exe",
+        "vspipe": "C:\\Program Files\\Hybrid\\64bit\\Vapoursynth\\VSPipe.exe",
+        "vapoursynth_python": "C:\\Program Files\\Hybrid\\64bit\\Vapoursynth\\python.exe",
+        "vsscripts_dir": "C:\\Program Files\\Hybrid\\64bit\\vsscripts",
+        "vsfilters_support_dir": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support",
+        "handbrake_cli": "C:\\Program Files\\HandBrake\\cli\\HandBrakeCLI.exe"
+    },
+
+    "_comment_tvai_model_dir": "Topaz's ffmpeg.exe normally inherits this from Topaz Video.exe when it launches ffmpeg itself; run standalone, tvai_up fails with 'Model not found' unless we set it explicitly.",
+    "tvai_model_dir": "C:\\ProgramData\\Topaz Labs LLC\\Topaz Video\\models",
+
+    "_comment_vs_plugins": "DLL paths reused from the Hybrid install (Hybrid\\64bit\\vsfilters\\...) so our own .vpy scripts drive the exact same QTGMC/VIVTC engine Hybrid's GUI uses, without a second VapourSynth setup. Loaded defensively (missing/optional ones are skipped) -- see vpy_templates/_plugins.vpy.j2.",
+    "vs_plugins": {
+        "lsmas": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\SourceFilter\\LSmashSource\\LSMASHSource.dll",
+        "ffms2": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\SourceFilter\\FFMS2\\ffms2.dll",
+        "vivtc": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DeinterlaceFilter\\VIVTC\\VIVTC.dll",
+        "mv": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support\\libmvtools.dll",
+        "nnedi3": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\ResizeFilter\\nnedi3\\libnnedi3.dll",
+        "znedi3": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\ResizeFilter\\nnedi3\\vsznedi3.dll",
+        "sneedif": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\ResizeFilter\\nnedi3\\libsneedif.dll",
+        "nnedi3cl": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\ResizeFilter\\nnedi3\\NNEDI3CL.dll",
+        "rgvs": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\GrainFilter\\RemoveGrain\\RemoveGrainVS.dll",
+        "zsmooth": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DenoiseFilter\\ZSmooth\\zsmooth.dll",
+        "eedi3m": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support\\EEDI3m.dll",
+        "akarin": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support\\akarin.dll",
+        "fmtconv": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support\\fmtconv.dll",
+        "bwdif": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DeinterlaceFilter\\Bwdif\\Bwdif.dll",
+        "dfttest": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DenoiseFilter\\DFTTest\\DFTTest.dll",
+        "grain": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\GrainFilter\\AddGrain\\AddGrain.dll",
+        "fft3dfilter": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DenoiseFilter\\FFT3DFilter\\fft3dfilter.dll",
+        "neo_fft3d": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\DenoiseFilter\\NEO_FFT3DFilter\\neo-fft3d.dll"
+    },
+
+    "probe": {
+        "idet_sample_seconds": 60,
+        "idet_sample_points": 3,
+        "confidence_threshold": 0.85
+    },
+
+    "default_topaz_preset": "topaz_default",
+    "default_denoise_tune": "none"
+}
