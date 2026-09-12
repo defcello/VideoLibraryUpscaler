@@ -47,6 +47,6 @@
         "confidence_threshold": 0.85
     },
 
-    "default_topaz_preset": "topaz_default",
+    "default_topaz_preset": "topaz_film",
     "default_denoise_tune": "none"
 }

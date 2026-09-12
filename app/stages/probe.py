@@ -44,7 +44,8 @@ CROP_RE = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 
 def _ffprobe_json(path: Path) -> dict:
     proc = subprocess.run(
-        [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+        [FFPROBE, *cuvid_decoder_args(path), "-v", "error", "-print_format", "json",
+         "-show_format", "-show_streams", str(path)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if proc.returncode != 0:

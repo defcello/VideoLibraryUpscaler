@@ -28,8 +28,11 @@ def load_preset(name: str) -> dict:
         return json.load(f)
 
 
+_NON_TOPAZ_PRESET_FILES = {"denoise_tunes", "content_types"}
+
+
 def list_presets() -> list[str]:
-    return sorted(p.stem for p in PRESETS_DIR.glob("*.json") if p.stem != "denoise_tunes")
+    return sorted(p.stem for p in PRESETS_DIR.glob("*.json") if p.stem not in _NON_TOPAZ_PRESET_FILES)
 
 
 CONFIG = load_config()

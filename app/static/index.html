@@ -27,12 +27,12 @@
             <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Denoise (HandBrake NLMeans Strong)</label>
         </div>
         <div class="field">
-            <label>Denoise tune</label>
-            <select id="denoise-tune"></select>
-        </div>
-        <div class="field">
-            <label>Topaz preset</label>
-            <select id="topaz-preset"></select>
+            <label>Content type</label>
+            <div class="preset-row">
+                <select id="content-type" style="flex:1"></select>
+                <button class="small" id="preset-toggle" title="Show Topaz processing stack">&#9654;</button>
+            </div>
+            <div class="kv" id="preset-details" hidden></div>
         </div>
 
         <div class="field">
@@ -48,7 +48,8 @@
                     <th style="width:12%">Status</th>
                     <th style="width:24%">Stage</th>
                     <th style="width:18%">Settings</th>
-                    <th style="width:20%">Updated</th>
+                    <th style="width:16%">Updated</th>
+                    <th style="width:4%"></th>
                 </tr>
             </thead>
             <tbody id="job-rows"></tbody>

@@ -1,0 +1,16 @@
+{
+    "description": "The single 'content type' choice shown in the UI resolves to a (topaz_preset, denoise_tune) pair server-side, so the frontend only needs one dropdown instead of two separate ones that had to be kept in sync by hand.",
+    "types": {
+        "film": {
+            "label": "Film",
+            "topaz_preset": "topaz_film",
+            "denoise_tune": "film"
+        },
+        "animation": {
+            "label": "Animation",
+            "topaz_preset": "topaz_animation",
+            "denoise_tune": "animation"
+        }
+    },
+    "default": "film"
+}

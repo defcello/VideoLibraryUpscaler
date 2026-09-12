@@ -68,22 +68,30 @@ function toggleSelect(path) {
 
 async function loadPresets() {
     presets = await api("/api/presets");
-    const tuneSel = document.getElementById("denoise-tune");
-    tuneSel.innerHTML = "";
-    for (const [key, tune] of Object.entries(presets.denoise_tunes.tunes)) {
+    const typeSel = document.getElementById("content-type");
+    typeSel.innerHTML = "";
+    for (const [key, type] of Object.entries(presets.content_types.types)) {
         const opt = document.createElement("option");
-        opt.value = key; opt.textContent = tune.label;
-        if (key === presets.default_denoise_tune) opt.selected = true;
-        tuneSel.appendChild(opt);
+        opt.value = key; opt.textContent = type.label;
+        if (key === presets.content_types.default) opt.selected = true;
+        typeSel.appendChild(opt);
     }
-    const topazSel = document.getElementById("topaz-preset");
-    topazSel.innerHTML = "";
-    for (const [name, preset] of Object.entries(presets.topaz_presets)) {
-        const opt = document.createElement("option");
-        opt.value = name; opt.textContent = `${name} (${preset.model}, ${preset.output_tier_height}p)`;
-        if (name === presets.default_topaz_preset) opt.selected = true;
-        topazSel.appendChild(opt);
-    }
+    renderPresetDetails();
+}
+
+function renderPresetDetails() {
+    const key = document.getElementById("content-type").value;
+    const type = presets.content_types.types[key];
+    const preset = presets.topaz_presets[type.topaz_preset];
+    document.getElementById("preset-details").textContent = JSON.stringify(preset, null, 2);
+}
+
+function togglePresetDetails() {
+    const panel = document.getElementById("preset-details");
+    const btn = document.getElementById("preset-toggle");
+    panel.hidden = !panel.hidden;
+    btn.innerHTML = panel.hidden ? "&#9654;" : "&#9660;";
+    if (!panel.hidden) renderPresetDetails();
 }
 
 async function submitJobs() {
@@ -94,8 +102,7 @@ async function submitJobs() {
         body: JSON.stringify({
             paths: Array.from(selected),
             denoise_enabled: document.getElementById("denoise-enabled").checked,
-            denoise_tune: document.getElementById("denoise-tune").value,
-            topaz_preset: document.getElementById("topaz-preset").value,
+            content_type: document.getElementById("content-type").value,
         }),
     });
     selected.clear();
@@ -136,18 +143,42 @@ function renderJobs(jobs) {
         tr.className = "job-row" + (job.id === openDetailId ? " selected" : "");
         tr.onclick = () => openDetail(job.id);
         const displayName = (job.settings && job.settings.display_filename) || job.original_filename;
+        const canDelete = job.status !== "running";
         tr.innerHTML = `
             <td class="filename" title="${displayName}">${displayName}</td>
             <td><span class="badge ${job.status}">${job.status}</span></td>
             <td><div class="stage-track">${stageTrack(job)}</div></td>
             <td style="color:var(--text-dim);font-size:12px">${settingsSummary(job)}</td>
             <td style="color:var(--text-dim);font-size:12px">${new Date(job.updated_at * 1000).toLocaleString()}</td>
+            <td>
+                <button class="small delete-btn" title="${canDelete ? "Delete this record" : "Can't delete a running job"}"
+                    ${canDelete ? "" : "disabled"}>&times;</button>
+            </td>
         `;
+        tr.querySelector(".delete-btn").onclick = (e) => {
+            e.stopPropagation();
+            deleteJob(job.id);
+        };
         tbody.appendChild(tr);
     }
 }
 
 // -------------------------------------------------------------- job detail
+
+async function deleteJob(jobId) {
+    const job = jobsById[jobId];
+    const name = (job && job.settings && job.settings.display_filename) || (job && job.original_filename) || jobId;
+    if (!confirm(`Remove this record from the queue?\n\n${name}\n\n(This only clears the dashboard entry -- any output file already on disk is untouched.)`)) {
+        return;
+    }
+    try {
+        await api(`/api/jobs/${jobId}`, { method: "DELETE" });
+    } catch (e) {
+        alert("Couldn't delete: " + e.message);
+        return;
+    }
+    if (openDetailId === jobId) closeDetail();
+}
 
 async function openDetail(jobId) {
     openDetailId = jobId;
@@ -257,6 +288,10 @@ function connectStream() {
 
 document.getElementById("submit-btn").onclick = submitJobs;
 document.getElementById("detail-close").onclick = closeDetail;
+document.getElementById("preset-toggle").onclick = togglePresetDetails;
+document.getElementById("content-type").onchange = () => {
+    if (!document.getElementById("preset-details").hidden) renderPresetDetails();
+};
 
 loadPresets();
 loadBrowse(null);

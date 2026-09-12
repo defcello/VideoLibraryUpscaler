@@ -34,8 +34,7 @@ def _startup() -> None:
 class CreateJobsRequest(BaseModel):
     paths: list[str]
     denoise_enabled: bool = False
-    denoise_tune: str = "none"
-    topaz_preset: str = CONFIG["default_topaz_preset"]
+    content_type: str = load_preset("content_types")["default"]
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -73,6 +72,11 @@ def api_get_job(job_id: str):
 
 @app.post("/api/jobs")
 def api_create_jobs(req: CreateJobsRequest):
+    content_types = load_preset("content_types")["types"]
+    if req.content_type not in content_types:
+        raise HTTPException(400, f"unknown content_type: {req.content_type}")
+    resolved = content_types[req.content_type]
+
     created = []
     for p in req.paths:
         src = Path(p)
@@ -83,8 +87,8 @@ def api_create_jobs(req: CreateJobsRequest):
             original_filename=src.name,
             working_name="",  # filled in by the ingest stage
             denoise_enabled=req.denoise_enabled,
-            denoise_tune=req.denoise_tune,
-            topaz_preset=req.topaz_preset,
+            denoise_tune=resolved["denoise_tune"],
+            topaz_preset=resolved["topaz_preset"],
         )
         created.append(job_id)
     return {"created": created}
@@ -108,6 +112,17 @@ def api_review_job(job_id: str, decision: ReviewDecisionRequest):
 
     if decision.proceed:
         db.update_job(job_id, status="pending", error_message=None)
+    return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_id}")
+def api_delete_job(job_id: str):
+    row = db.get_job(job_id)
+    if row is None:
+        raise HTTPException(404, "job not found")
+    if row["status"] == "running":
+        raise HTTPException(400, "can't delete a job that's currently running -- wait for it to finish or fail first")
+    db.delete_job(job_id)
     return {"ok": True}
 
 
@@ -151,6 +166,7 @@ def api_presets():
     return {
         "topaz_presets": {name: load_preset(name) for name in list_presets()},
         "denoise_tunes": load_preset("denoise_tunes"),
+        "content_types": load_preset("content_types"),
         "default_topaz_preset": CONFIG["default_topaz_preset"],
         "default_denoise_tune": CONFIG["default_denoise_tune"],
         "nas_root": CONFIG["nas_root"],

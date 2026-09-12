@@ -194,6 +194,16 @@ def get_logs(job_id: str, limit: int = 500) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def delete_job(job_id: str) -> None:
+    """Removes a job's record (and its logs) from the manifest so the queue
+    dashboard doesn't get cluttered. Does NOT touch any file on disk -- the
+    finished output already lives wherever finalize.py moved it, and this
+    only clears the tracking row."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM job_logs WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+
 def recover_running_jobs() -> int:
     """On startup, any job stuck in 'running' means the process died mid-stage.
     Its `stage` field only advances after a stage's output is confirmed

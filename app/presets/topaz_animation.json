@@ -1,11 +1,13 @@
 {
-    "description": "Default Topaz Video AI upscale preset, translated from the r/AIRemastered non-generative upscaling guide onto current Topaz Video AI model names (verified against this machine's installed models). Edit freely -- this is meant to be tuned per title/series over time, not treated as gospel.",
+    "description": "Animation/cel content Topaz Video AI upscale preset -- uses Gaia Animation (ganim-1) instead of Gaia Computer-Generated (gcg-5). gcg-5 is tuned for aliasing/moire on CG-rendered footage; on flat-color hand-drawn/cel animation with hard black outlines it can produce edge ghosting/haloing. ganim-1 is Topaz's model specifically trained for this content type.",
 
-    "model": "gcg-5",
-    "model_display_name": "Gaia - Computer Generated",
+    "model": "ganim-1",
+    "model_display_name": "Gaia Animation",
 
     "output_tier_height": 1080,
     "scale_prioritize": "height",
+    "resize_flags": "bicubic",
+    "_note_scale": "ganim-1 only supports a fixed 2x AI scale (confirmed from its model json) -- unlike gcg-5's 1/2/4. For sources needing more than 2x to reach the output tier, the remainder is a plain (non-AI) bicubic resize after the AI pass.",
 
     "tvai_up_params": {
         "preblur": 0,
@@ -39,7 +41,7 @@
         "preset": "p6",
         "bitrate_mode": "vbr_hq",
         "cq": 18,
-        "container": "mov",
+        "container": "mkv",
         "audio_mode": "copy",
         "_note": "Topaz's bundled ffmpeg (needed for the tvai_up filter) has no libx264 -- only hardware encoders -- so h264_nvenc is the only option in this same process. Lower cq = higher quality/bigger files."
     }
