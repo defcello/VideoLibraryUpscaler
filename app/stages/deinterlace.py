@@ -76,7 +76,10 @@ def run(job_id: str) -> None:
     # Still routed through ffmpeg rather than a raw byte copy so we can tag
     # the file with the processing metadata below.
     if skip_upscale and scan_type == "progressive" and _no_normalize_needed(settings):
-        out_path = src.with_name(src.stem + "_deint" + src.suffix)
+        # .mkv regardless of the source's own container -- standardized
+        # delivery container, and matroska remuxes virtually any codec
+        # losslessly via -c copy.
+        out_path = src.with_name(src.stem + "_deint.mkv")
         summary = "already progressive, no crop/PAR change needed -- stream copy, no re-encode"
         db.log(job_id, STAGE, f"skip_upscale: {summary}")
         meta = _build_terminal_metadata(job, settings, summary)
@@ -117,7 +120,11 @@ def run(job_id: str) -> None:
     else:
         deinterlace_summary = "already progressive; PAR/crop normalize only"
 
-    out_path = src.with_name(src.stem + "_deint.mp4")
+    # Non-terminal (feeds into denoise/upscale next) stays .mp4 as a plain
+    # mezzanine; terminal (skip_upscale) uses .mkv, the standardized
+    # delivery container.
+    out_ext = ".mkv" if skip_upscale else ".mp4"
+    out_path = src.with_name(src.stem + "_deint" + out_ext)
 
     ffmpeg_cmd = [
         FFMPEG, "-hide_banner", "-y",
