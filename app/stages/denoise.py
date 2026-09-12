@@ -20,9 +20,15 @@ def run(job_id: str) -> None:
     settings = db.get_settings(job_id)
     src = Path(job["current_file"])
 
+    if job["skip_upscale"]:
+        db.log(job_id, STAGE, "skip_upscale set -- deinterlace-only mode, also skipping denoise")
+        db.update_job(job_id, stage=STAGE, status="pending")
+        return
+
     if not job["denoise_enabled"]:
         db.log(job_id, STAGE, "denoise disabled for this job -- passing through unchanged")
         db.update_job(job_id, stage=STAGE, status="pending")
+        db.merge_settings(job_id, {"denoise_summary": "skipped"})
         return
 
     tunes = load_preset("denoise_tunes")
@@ -52,4 +58,7 @@ def run(job_id: str) -> None:
 
     db.log(job_id, STAGE, f"denoise complete -> {out_path}")
     db.update_job(job_id, stage=STAGE, status="pending", current_file=str(out_path))
-    db.merge_settings(job_id, {"display_filename": new_name})
+    db.merge_settings(job_id, {
+        "display_filename": new_name,
+        "denoise_summary": f"HandBrake NLMeans {nlmeans_preset} ({tune['label']})",
+    })

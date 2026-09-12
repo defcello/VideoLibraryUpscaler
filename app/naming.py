@@ -81,6 +81,22 @@ def set_upscaled_tag(filename: str, height: int) -> str:
     return join_tags(base, [f"Upscaled {height}p"], ext)
 
 
+def set_final_progressive_tag(filename: str, height: int) -> str:
+    """Terminal filename for skip-upscale (deinterlace-only) jobs: keeps only
+    the plain resolution tag, e.g. '[480p]' -- source-type tags like
+    [DVD]/[Bluray] are dropped, same rationale as set_upscaled_tag."""
+    base, _tags, ext = split_tags(filename)
+    return join_tags(base, [f"{height}p"], ext)
+
+
+def has_progressive_res_tag(filename: str) -> bool:
+    """True if the filename already carries a plain progressive-resolution
+    tag (e.g. '[1080p]', not '[480i]') -- used to no-op skip-upscale jobs
+    whose source is already a finished progressive deliverable."""
+    _, tags, _ = split_tags(filename)
+    return any(re.match(r"^\d+p$", t.strip(), re.IGNORECASE) for t in tags)
+
+
 def detect_source_scan_hint(filename: str) -> str | None:
     """Best-effort seed from an existing [480i]/[480p]-style tag, if present."""
     _, tags, _ = split_tags(filename)

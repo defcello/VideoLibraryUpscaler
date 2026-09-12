@@ -16,8 +16,20 @@ from pydantic import BaseModel
 
 from . import db, worker
 from .config import CONFIG, STATIC_DIR, list_presets, load_preset
+from .topaz_models import available_scales, describe_upscale_strategy
 
 app = FastAPI(title="AI Remaster Pipeline")
+
+
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    # This is a single-operator local tool under active iteration -- always
+    # serve the latest static files rather than fighting stale browser caches
+    # of app.js/style.css after every edit.
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.on_event("startup")
@@ -35,6 +47,7 @@ class CreateJobsRequest(BaseModel):
     paths: list[str]
     denoise_enabled: bool = False
     content_type: str = load_preset("content_types")["default"]
+    skip_upscale: bool = False
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -89,6 +102,7 @@ def api_create_jobs(req: CreateJobsRequest):
             denoise_enabled=req.denoise_enabled,
             denoise_tune=resolved["denoise_tune"],
             topaz_preset=resolved["topaz_preset"],
+            skip_upscale=req.skip_upscale,
         )
         created.append(job_id)
     return {"created": created}
@@ -161,10 +175,33 @@ def api_browse(path: Optional[str] = None):
 
 # ------------------------------------------------------------------ presets
 
+def _preset_display(preset: dict) -> dict:
+    """Human-readable summary of a Topaz preset's processing stack, computed
+    from the same logic upscale.py actually uses -- so the UI's preset panel
+    can never drift out of sync with what a job would really do."""
+    scales = available_scales(preset["model"])
+    enc = preset["encoder"]
+    pc = preset.get("precleanup", {})
+    return {
+        "model_label": f"{preset['model_display_name']} ({preset['model']})",
+        "target_tier": f"{preset['output_tier_height']}p",
+        "available_scales": scales,
+        "upscale_strategy": describe_upscale_strategy(preset["model"]),
+        "precleanup_enabled": bool(pc.get("enabled")),
+        "precleanup_label": f"{pc.get('model_display_name', '?')} ({pc.get('model', '?')})" if pc.get("enabled") else None,
+        "resize_flags": preset.get("resize_flags", "bicubic"),
+        "encoder_label": f"{enc['codec']} ({enc['profile']} profile, {enc['bitrate_mode']}, CQ {enc['cq']})",
+        "container": enc["container"].upper(),
+        "audio_mode": enc["audio_mode"],
+    }
+
+
 @app.get("/api/presets")
 def api_presets():
+    topaz_presets = {name: load_preset(name) for name in list_presets()}
     return {
-        "topaz_presets": {name: load_preset(name) for name in list_presets()},
+        "topaz_presets": topaz_presets,
+        "topaz_preset_display": {name: _preset_display(p) for name, p in topaz_presets.items()},
         "denoise_tunes": load_preset("denoise_tunes"),
         "content_types": load_preset("content_types"),
         "default_topaz_preset": CONFIG["default_topaz_preset"],

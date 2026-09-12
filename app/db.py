@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     denoise_enabled       INTEGER NOT NULL DEFAULT 0,
     denoise_tune          TEXT NOT NULL DEFAULT 'none',
     topaz_preset           TEXT NOT NULL DEFAULT 'topaz_default',
+    skip_upscale            INTEGER NOT NULL DEFAULT 0,
     created_at             REAL NOT NULL,
     updated_at              REAL NOT NULL
 );
@@ -99,6 +100,16 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight ALTER-if-missing migration for columns added after the
+    table already existed on disk (CREATE TABLE IF NOT EXISTS won't add them
+    to an existing table)."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "skip_upscale" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN skip_upscale INTEGER NOT NULL DEFAULT 0")
 
 
 def create_job(
@@ -108,6 +119,7 @@ def create_job(
     denoise_enabled: bool,
     denoise_tune: str,
     topaz_preset: str,
+    skip_upscale: bool = False,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
@@ -116,12 +128,12 @@ def create_job(
             """INSERT INTO jobs (
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
-                denoise_enabled, denoise_tune, topaz_preset,
+                denoise_enabled, denoise_tune, topaz_preset, skip_upscale,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?)""",
             (
                 job_id, original_nas_path, original_filename, working_name,
-                int(denoise_enabled), denoise_tune, topaz_preset,
+                int(denoise_enabled), denoise_tune, topaz_preset, int(skip_upscale),
                 now, now,
             ),
         )

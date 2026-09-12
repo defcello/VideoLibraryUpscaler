@@ -83,7 +83,24 @@ function renderPresetDetails() {
     const key = document.getElementById("content-type").value;
     const type = presets.content_types.types[key];
     const preset = presets.topaz_presets[type.topaz_preset];
-    document.getElementById("preset-details").textContent = JSON.stringify(preset, null, 2);
+    const d = presets.topaz_preset_display[type.topaz_preset];
+    const tune = presets.denoise_tunes.tunes[type.denoise_tune];
+
+    const row = (label, value) => `<div class="stack-row"><span class="stack-label">${label}</span><span>${value}</span></div>`;
+
+    let html = "";
+    html += row("Model", escapeHtml(d.model_label));
+    html += row("Target resolution", escapeHtml(d.target_tier));
+    html += `<div class="stack-row"><span class="stack-label">Upscale strategy</span></div>`;
+    html += `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`;
+    html += row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
+    html += row("Resize filter", `${escapeHtml(d.resize_flags)} <span class="stack-note-inline">(avoids ringing/haloing on hard edges)</span>`);
+    html += row("Denoise tune", escapeHtml(tune.label));
+    html += row("Encoder", escapeHtml(d.encoder_label));
+    html += row("Container", escapeHtml(d.container));
+    html += row("Audio", escapeHtml(d.audio_mode));
+
+    document.getElementById("preset-details").innerHTML = html;
 }
 
 function togglePresetDetails() {
@@ -103,11 +120,24 @@ async function submitJobs() {
             paths: Array.from(selected),
             denoise_enabled: document.getElementById("denoise-enabled").checked,
             content_type: document.getElementById("content-type").value,
+            skip_upscale: document.getElementById("skip-upscale").checked,
         }),
     });
     selected.clear();
     document.getElementById("selected-count").textContent = "none selected";
     loadBrowse(browsePath);
+}
+
+// "Skip Upscaling" remembers its last state across sessions (per-viewer
+// convenience, not something the server needs to track).
+function initSkipUpscaleCheckbox() {
+    const cb = document.getElementById("skip-upscale");
+    try {
+        cb.checked = localStorage.getItem("skipUpscale") === "true";
+    } catch (e) { /* private browsing etc -- default unchecked */ }
+    cb.onchange = () => {
+        try { localStorage.setItem("skipUpscale", cb.checked); } catch (e) { /* ignore */ }
+    };
 }
 
 // --------------------------------------------------------------- job table
@@ -293,6 +323,7 @@ document.getElementById("content-type").onchange = () => {
     if (!document.getElementById("preset-details").hidden) renderPresetDetails();
 };
 
+initSkipUpscaleCheckbox();
 loadPresets();
 loadBrowse(null);
 connectStream();

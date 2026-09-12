@@ -43,6 +43,12 @@ def run(job_id: str) -> None:
     if not src.exists():
         raise FileNotFoundError(f"source not found on NAS: {src}")
 
+    if job["skip_upscale"] and naming.has_progressive_res_tag(job["original_filename"]):
+        db.log(job_id, STAGE, "skip_upscale set and source is already tagged with a progressive "
+                              "resolution (e.g. [1080p]) -- nothing to do, no-op")
+        db.update_job(job_id, stage="finalized", status="done", current_file=str(src))
+        return
+
     size = src.stat().st_size
     drive = _pick_staging_drive(size)
     if drive.rstrip("\\/").upper().startswith("R:"):

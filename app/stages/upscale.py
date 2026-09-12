@@ -1,26 +1,32 @@
 """Stage 4: Topaz Video AI upscale, driven headlessly via Topaz's own bundled
 ffmpeg.exe and its `tvai_up` filter (confirmed present: `ffmpeg -h
 filter=tvai_up` exposes every parameter the Topaz GUI has). Preset-driven --
-see app/presets/topaz_default.json -- since this is the piece you'll most
-want to keep tuning per title/series.
+see app/presets/topaz_film.json / topaz_animation.json -- since this is the
+piece you'll most want to keep tuning per title/series.
 
 Model shortnames were confirmed against this machine's installed model JSONs
 (C:\\ProgramData\\Topaz Labs LLC\\Topaz Video\\models\\*.json):
-  gcg-5 = "Gaia - Computer Generated" (the guide's "Gaia CG" / "Input Video
-          Type: Computer Generated") -- Precision-class, not Generative.
-  nyx-3 = "Nyx" pre-clean denoise, for heavily degraded sources.
+  gcg-5   = "Gaia - Computer Generated" (Film preset) -- Precision-class.
+  ganim-1 = "Gaia Animation" (Animation preset) -- trained for flat-color
+            cel/hand-drawn content; only supports a fixed 2x per pass, so
+            reaching a 4x-ish tier chains two passes (see topaz_models.py).
+  nyx-3   = "Nyx" pre-clean denoise, for heavily degraded sources.
+
+If the job's `skip_upscale` flag is set, this stage is a no-op (see
+deinterlace.py, which becomes the terminal stage in that mode instead).
 """
 from __future__ import annotations
 
 import json
-import math
 import subprocess
 from pathlib import Path
 
 from .. import db, naming
 from ..config import CONFIG, load_preset
 from ..decoder_util import cuvid_decoder_args
+from ..metadata_tags import ffmpeg_metadata_args, processed_date
 from ..procutil import run_logged
+from ..topaz_models import build_scale_passes
 
 STAGE = "upscaled"
 
@@ -43,54 +49,10 @@ def _tvai_params(params: dict) -> str:
     return ":".join(f"{k}={v}" for k, v in params.items())
 
 
-def _available_scales(model: str) -> list[int]:
-    """Each Topaz model only supports specific integer scales (e.g. gcg-5 is
-    1/2/4, not 3 -- confirmed by testing: ffmpeg rejects "Invalid scale 3 for
-    model gcg-5, allowed scales are: 1, 2, 4"). Read the model's own JSON
-    (same files used to confirm model shortnames) rather than hardcoding a set
-    that only fits one model."""
-    path = Path(CONFIG["tvai_model_dir"]) / f"{model}.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for backend in data.get("backends", {}).values():
-            scales = backend.get("scales")
-            if scales:
-                return sorted(int(s) for s in scales.keys())
-    except (OSError, json.JSONDecodeError, ValueError):
-        pass
-    return [1, 2, 3, 4]  # fallback if the model json is missing/unreadable
-
-
-def _build_scale_passes(source_h: int, target_h: int, model: str) -> list[int]:
-    """tvai_up's `scale` is a coarse integer AI upscale factor -- NOT the same
-    thing as its `w`/`h` params, which are only "estimate" hints used for
-    auto-picking a scale when `estimate` sampling is enabled, and do nothing
-    to the actual output size on their own (confirmed by testing: passing w/h
-    alone left output at the source resolution, scale=1 default).
-
-    Returns the list of scale factors to run tvai_up with IN SEQUENCE. If a
-    single available scale covers the requested tier, that's one pass (e.g.
-    gcg-5 covers a 2.25x need with one scale=4 pass). If the model's largest
-    scale doesn't cover it alone (e.g. ganim-1 only offers 2x), we chain that
-    largest scale repeatedly -- two 2x AI passes for a ~4x need -- rather
-    than falling back to a plain (non-AI) resize for the remainder. A final
-    `scale=` filter still resizes to the exact target dimensions afterward."""
-    options = _available_scales(model)
-    if target_h <= source_h:
-        return [1] if 1 in options else []
-
-    needed = target_h / source_h
-    covering = [s for s in options if s >= needed]
-    if covering:
-        return [min(covering)]
-
-    largest = max(options)
-    passes: list[int] = []
-    cumulative = 1.0
-    while cumulative < needed and len(passes) < 3:
-        passes.append(largest)
-        cumulative *= largest
-    return passes
+def _scan_summary(settings: dict) -> str:
+    conf = settings.get("confidence")
+    conf_str = f"{conf:.2f}" if isinstance(conf, (int, float)) else "n/a"
+    return f"{settings.get('scan_type', '?')} (tff={settings.get('tff')}, confidence={conf_str})"
 
 
 def run(job_id: str) -> None:
@@ -98,12 +60,17 @@ def run(job_id: str) -> None:
     settings = db.get_settings(job_id)
     src = Path(job["current_file"])
 
+    if job["skip_upscale"]:
+        db.log(job_id, STAGE, "skip_upscale set -- passing through unchanged (deinterlace.py is the terminal stage)")
+        db.update_job(job_id, stage=STAGE, status="pending")
+        return
+
     preset = load_preset(job["topaz_preset"] or CONFIG["default_topaz_preset"])
 
     width, height = _current_dims(src)
     target_h = preset["output_tier_height"]
     target_w = int(round(width * target_h / height / 2) * 2)
-    scale_passes = _build_scale_passes(height, target_h, preset["model"])
+    scale_passes = build_scale_passes(height, target_h, preset["model"])
     db.log(job_id, STAGE, f"source {width}x{height} -> target {target_w}x{target_h} "
                           f"(model={preset['model']}, scale passes={scale_passes or 'none'}, then exact resize)")
 
@@ -131,6 +98,20 @@ def run(job_id: str) -> None:
 
     out_path = src.with_name(src.stem + "_upscaled." + preset["encoder"]["container"])
 
+    upscale_summary = (f"Topaz {preset['model_display_name']} ({preset['model']}), "
+                       f"passes={scale_passes or 'none'}, target={target_w}x{target_h}, "
+                       f"resize={resize_flags}")
+    meta = {
+        "TOOL": "AI Remaster Pipeline",
+        "SOURCE_FILE": job["original_filename"],
+        "SCAN_DETECTION": _scan_summary(settings),
+        "DEINTERLACE": settings.get("deinterlace_summary", "n/a"),
+        "DENOISE": settings.get("denoise_summary", "skipped"),
+        "UPSCALE": upscale_summary,
+        "ENCODER": f"{preset['encoder']['codec']} {preset['encoder']['profile']} cq={preset['encoder']['cq']}",
+        "PROCESSED": processed_date(),
+    }
+
     decoder_args = cuvid_decoder_args(src)
     cmd = [
         FFMPEG, "-hide_banner", "-y",
@@ -144,6 +125,7 @@ def run(job_id: str) -> None:
         "-cq", str(preset["encoder"]["cq"]),
         "-profile:v", preset["encoder"]["profile"],
         "-c:a", preset["encoder"]["audio_mode"],
+        *ffmpeg_metadata_args(meta),
         str(out_path),
     ]
     run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]})
