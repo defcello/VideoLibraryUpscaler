@@ -119,11 +119,120 @@ tag (e.g. `[1080p]`) — nothing to do.
 
 ### Content types / presets (app/presets/)
 
-The UI exposes one "Film" / "Animation" choice (`content_types.json`); the server resolves that to a
-`(topaz_preset, denoise_tune)` pair before creating the job (`server.py`'s `api_create_jobs`) — the
-frontend never needs to know individual preset filenames. Presets (`topaz_film.json`,
-`topaz_animation.json`) are meant to be hand-tuned over time, not treated as fixed; `resize_flags`,
-`tvai_up_params`, and encoder settings are all preset-level knobs.
+The UI exposes a "Film (Non-Generative)" / "Film (Generative)" / "Animation" choice
+(`content_types.json`); the server resolves that to a `(topaz_preset, denoise_tune)` pair before
+creating the job (`server.py`'s `api_create_jobs`) — the frontend never needs to know individual
+preset filenames. Presets (`topaz_film.json`, `topaz_animation.json`, `topaz_film_generative.json`)
+are meant to be hand-tuned over time, not treated as fixed; `resize_flags`, `tvai_up_params`, and
+encoder settings are all preset-level knobs.
+
+A preset's `"engine"` field picks the upscale mechanism: absent/`"tvai_up"` (default) uses the
+classic direct ffmpeg `tvai_up` filter path (`upscale.py`'s main `run()`); `"neuroserver"` routes to
+`upscale.py`'s `_run_generative()` instead — see below, this is a completely different tool with its
+own set of gotchas. `server.py`'s `_preset_display()` branches the same way for the UI's preset panel.
+
+### Generative (Starlight) engine (app/stages/upscale.py's `_run_generative`)
+
+Topaz's newer generative/diffusion models (marketed as "Starlight" — Starlight Sharp, Starlight Mini,
+etc.) are **not reachable through ffmpeg's `tvai_up` filter at all** — confirmed by testing: none of
+`astra`/`astrahq`/`astrafast`/`astrasharp`/`sls` appear in `tvai_up`'s compiled model enum on this
+Topaz Video AI version (1.7.0.0), even though their model JSONs exist under `tvai_model_dir`. They're
+served by a completely separate local process, `neuroserver.exe` (bundled at
+`neuroserver\neuroserver.exe` next to Topaz's ffmpeg), discovered and reverse-engineered via a
+Process Monitor capture of a real Topaz Video AI GUI render (Starlight Sharp specifically) since none
+of this is documented anywhere:
+
+- **Invocation**: `neuroserver.exe --once --input-path <file> --output-path <file> --input-width
+  --input-height --output-width --output-height --upscale-factor --max-gpu-mem --filters
+  '[{"model": "<bare name>"}]' --ffmpeg-encoding "<ffmpeg args>"`. The `model` value is the **bare**
+  model name (e.g. `"astrasharp"`) — NOT the fully-qualified `"astrasharp-win-nvidia-1gpu"`-style key
+  that appears in the filter's own "Model X not found, available models: [...]" error message; that
+  qualified form is only ever the internal registry's display of available keys, never a valid input
+  value. Passing it as input produces the exact same "not found" error for every model including ones
+  that definitely work (confirmed by testing `slm-win-nvidia-1gpu`, a model also reachable via
+  `tvai_up`, which fails identically) — this cost a lot of debugging time before the real GUI's actual
+  command line settled it.
+- **`TOPAZ_MODEL_STORE`** must be set explicitly when run standalone (same reasoning as
+  `TVAI_MODEL_DIR` for `tvai_up`) — `config.json`'s `topaz_model_store`. On this machine the real
+  weight store is on the **Z: drive**, not the default `C:\ProgramData\...` location tvai_up's models
+  use — confirmed by watching the real GUI's file reads. Don't assume the classic `tvai_model_dir`
+  path also holds these weights.
+- **`cwd` must be `neuroserver.exe`'s own directory** when launching it as a subprocess — it resolves
+  its own bundled `Lib\site-packages` (torch, etc.) relative to the working directory, not its own exe
+  path. Without this it fails immediately with `ModuleNotFoundError: No module named 'torch'`.
+- **PATH must have Topaz's own ffmpeg directory prepended.** `neuroserver.exe`'s internal
+  post-process step (see below) shells out to a bare `ffmpeg` resolved off `PATH` rather than using
+  its own bundled Topaz ffmpeg — on this machine `PATH` otherwise resolves `ffmpeg` to the GPL build
+  from winget (`config.json`'s `ffmpeg_libx264`), which has no `tvai_up` filter at all
+  (`--enable-tvai` is a Topaz-specific build flag), so that internal step fails outright with
+  `Error : Filter not found` instead of the (recoverable) QSV error below.
+- **The internal post-process step is reliably broken on this machine and there's no flag to fix it
+  directly.** After the actual diffusion pass finishes, `neuroserver.exe` runs a second internal
+  `tvai_up` pass (Nyx-3 denoise model) to AI-upscale the raw diffusion output the rest of the way to
+  the exact requested tier, then encodes the final file — and that internal ffmpeg call hits the same
+  QSV hwaccel-autopick bug as everything else on this NVIDIA-only machine (see "Topaz ffmpeg gotchas"
+  below), except here it's Topaz's own internal call with no exposed flag to force `h264_cuvid`.
+  **The user independently discovered and validated the workaround in the real GUI first**: the raw,
+  pre-post-process diffusion output survives on disk as a `<requested_output_path>.temp.<hash>.mp4`
+  sibling file next to the (empty/missing) requested output — it's complete and correct, just missing
+  audio (Topaz strips audio before the post-process step). `_run_generative()` automates exactly this:
+  run `neuroserver.exe`, swallow the expected `CommandError`, glob for the `.temp.*.mp4` sibling,
+  validate its dimensions/existence, then remux the source's original audio back in via a plain
+  `-c copy` (no re-encode, no decoder concerns either way since nothing is being decoded).
+- **The model's real output height does not necessarily match the requested tier.** Requesting
+  `--upscale-factor 3` / `--output-height 1440` on a 480p 4:3 source produced an actual, measured
+  1440x1080 result (2.25x, not 3x) — confirmed independently by the user on two separate real GUI
+  renders and by our own testing. This looks like the diffusion model has its own native/canonical
+  output canvas (1440x1080 for 4:3 content) rather than a scale-relative output. Because of this,
+  `_run_generative()` always measures the actual recovered file's dimensions via ffprobe and validates
+  against `output_tier_height` as a **minimum**, rather than trusting the requested/nominal tier for
+  anything beyond choosing what to ask for.
+
+### Test crop / In-Out points (app/stages/ingest.py)
+
+A job can optionally carry `crop_start_seconds` / `crop_end_seconds` (nullable REAL columns on
+`jobs`), set via the dashboard's "Test crop" checkbox or the `/api/jobs` POST body. When set,
+`ingest.py` trims the staged copy immediately after copying (`-ss <start> -i <file> -t <duration> -c
+copy`) before the rest of the pipeline ever sees it — added specifically to make iterating on the
+very slow generative engine practical. Uses `-c copy` (no re-encode) so the cut snaps to the nearest
+preceding keyframe rather than being frame-exact — an accepted tradeoff for a testing feature, not
+something to "fix" for production accuracy.
+
+### Job control: abort / rerun / failure categories
+
+`worker.py` runs a single background thread processing one job at a time; there's no built-in way to
+interrupt a subprocess mid-stage from another thread, so `procutil.py` tracks every `subprocess.Popen`
+it starts in a module-level list (`_track`/`_untrack`, guarded by a lock) and exposes `kill_active()`.
+`worker.request_cancel(job_id)` uses that to abort the actively-running job (kills its subprocess,
+which makes the stage's `run_logged`/`run_piped_logged` call raise `CommandError`, caught by
+`_process_one` and — because a matching cancel request is recorded — filed as `status='cancelled'`
+rather than `'failed'`) or, for a merely-queued job, marks it cancelled directly with nothing to kill.
+`DELETE /api/jobs/{id}` calls this automatically first if the job is running, then cleans up its
+staging dir before deleting the row — the dashboard's delete button doubles as "abort and delete."
+`POST /api/jobs/{id}/rerun` duplicates a job's *original submission parameters* (not its runtime
+settings/current_file) into a brand new job and queues it — the original job/output is untouched.
+
+**Hard-won gotcha**: any code touching the module-level `_cancel_requested_job_id` from inside
+`_process_one` needs `global _cancel_requested_job_id` declared in *that function's own scope* — a
+missing `global` there caused `UnboundLocalError` the moment any stage completed (success or
+failure), which propagated out of `_process_one` uncaught and **silently killed the entire worker
+thread** (a daemon thread — Python just prints the traceback to stderr and moves on; the FastAPI
+process keeps running as if nothing happened, but every job submitted afterward sits at `'pending'`
+forever with no error visible anywhere in the UI). This is exactly the failure mode the project's
+"never crash the worker loop" comment on `_process_one`'s except clause was meant to prevent, and it
+still happened because that protection only covered `runner(job_id)`, not `_process_one`'s own
+bookkeeping code. `_loop()` now also wraps its call to `_process_one` in a defensive try/except as a
+second layer, precisely so a future bug in `_process_one` itself can't take the whole worker down
+silently again — if you ever see jobs stuck at `'pending'` with a live server and an idle worker
+status, check the server's own stdout/stderr for an uncaught thread exception before looking anywhere
+else.
+
+`failure_category` (nullable column on `jobs`, set alongside `status='failed'`) is a best-effort
+classification of the error message/traceback text (`worker._classify_failure`) into `'oom'` /
+`'disk_full'` / `None` — purely a UI label (`server.py`'s `_row_to_dict`/`api_*` return it as-is,
+`app.js`'s `statusLabel()` renders "FAILED (OOM)" / "FAILED (Disk Full)"), not a control-flow value;
+`status` itself stays `'failed'` either way so existing retry/terminal-state logic doesn't need to
+know about it.
 
 ## Machine-specific configuration
 

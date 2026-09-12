@@ -1,0 +1,26 @@
+{
+    "description": "Generative film upscale using Topaz's Starlight Sharp diffusion model, driven via neuroserver.exe directly -- Starlight models are NOT exposed through ffmpeg's tvai_up filter at all (confirmed: 'astrasharp' etc. are absent from tvai_up's compiled model enum), so this preset uses a completely different engine than topaz_film.json/topaz_animation.json. Single-pass mode: requests the smallest integer scale that reaches the output tier (e.g. 3x for a 480p source -> 1080p tier), matching the classic engine's covering-scale logic, rather than chaining passes.",
+
+    "engine": "neuroserver",
+
+    "model": "astrasharp",
+    "model_display_name": "Starlight Sharp",
+    "ai_model_label": "Starlight",
+    "model_variant_label": "Starlight Sharp",
+
+    "output_tier_height": 1080,
+    "_note_output_tier": "This is a MINIMUM acceptable height, not an exact target. Empirically (confirmed both independently by the user and by our own testing), the diffusion pass's actual native output height can land below the nominally requested scale/output-dims (e.g. requesting 3x/1440p on a 480p source produced a real 1440x1080 result, not 1440p) -- Topaz's own further AI-upscale-to-exact-target post-process step is what would close that gap, but see _note_post_process_bug below. upscale.py measures the ACTUAL recovered file's dimensions and validates against this minimum rather than trusting the requested tier.",
+
+    "_note_post_process_bug": "neuroserver.exe's internal post-process step (a second tvai_up pass with the Nyx-3 denoise model, meant to AI-upscale the raw diffusion output the rest of the way to the exact requested tier) reliably fails on this machine with ffmpeg's h264_qsv 'Error creating a MFX session' -- the same broken-hwaccel-autopick issue documented for the classic engine in decoder_util.py, except this time it's inside neuroserver's own internal ffmpeg call, which exposes no flag to force the cuvid decoder. The user independently discovered and already works around this in the real Topaz Video AI GUI: recover the '<output>.temp.<hash>.mp4' sibling file (the raw, pre-post-process diffusion output, which IS valid and complete) and mux the source's audio track back in. upscale.py automates exactly that recovery.",
+
+    "max_gpu_mem_gb": 19,
+
+    "ffmpeg_encoding": "-c:v h264_nvenc -pix_fmt yuv420p -profile:v high -preset p6 -rc constqp -qp 18",
+    "_note_ffmpeg_encoding": "Passed to neuroserver.exe's --ffmpeg-encoding -- this is the ONLY encode step that actually runs (see _note_post_process_bug), so it fully determines the recovered file's video quality. Values mirror Topaz's own defaults for this model, confirmed working via a real GUI capture.",
+
+    "encoder": {
+        "container": "mkv",
+        "audio_mode": "copy",
+        "_note": "The recovered diffusion-pass output already has no audio (Topaz strips it before the internal post-process step) -- upscale.py remuxes the original source's audio track back in via a plain stream copy (no re-encode, no decoder concerns) and writes .mkv for the same custom-metadata-tag reason as the classic engine (see CLAUDE.md)."
+    }
+}

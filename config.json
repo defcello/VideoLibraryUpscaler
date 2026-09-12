@@ -13,11 +13,15 @@
         "vapoursynth_python": "C:\\Program Files\\Hybrid\\64bit\\Vapoursynth\\python.exe",
         "vsscripts_dir": "C:\\Program Files\\Hybrid\\64bit\\vsscripts",
         "vsfilters_support_dir": "C:\\Program Files\\Hybrid\\64bit\\vsfilters\\Support",
-        "handbrake_cli": "C:\\Program Files\\HandBrake\\cli\\HandBrakeCLI.exe"
+        "handbrake_cli": "C:\\Program Files\\HandBrake\\cli\\HandBrakeCLI.exe",
+        "neuroserver": "C:\\Program Files\\Topaz Labs LLC\\Topaz Video\\neuroserver\\neuroserver.exe"
     },
 
     "_comment_tvai_model_dir": "Topaz's ffmpeg.exe normally inherits this from Topaz Video.exe when it launches ffmpeg itself; run standalone, tvai_up fails with 'Model not found' unless we set it explicitly.",
     "tvai_model_dir": "C:\\ProgramData\\Topaz Labs LLC\\Topaz Video\\models",
+
+    "_comment_neuroserver": "neuroserver.exe (Topaz's separate local diffusion-model service, used for generative Starlight models -- these are NOT reachable through ffmpeg's tvai_up filter at all) needs TOPAZ_MODEL_STORE set explicitly when run standalone, same reasoning as tvai_model_dir above. On this machine the actual weight store was relocated to the Z: drive (not the default C:\\ProgramData location) -- confirmed by a Process Monitor capture of a real Topaz Video AI GUI render. neuroserver's OWN internal post-process step (a second tvai_up pass) also shells out to a bare 'ffmpeg' on PATH rather than using its own bundled one, so PATH must have Topaz's ffmpeg directory prepended before launching it or that internal step fails with 'Filter not found' (using system PATH found the GPL ffmpeg from winget instead, which lacks --enable-tvai).",
+    "topaz_model_store": "Z:\\ProgramData\\Topaz Labs LLC\\Topaz Video\\models\\models",
 
     "_comment_vs_plugins": "DLL paths reused from the Hybrid install (Hybrid\\64bit\\vsfilters\\...) so our own .vpy scripts drive the exact same QTGMC/VIVTC engine Hybrid's GUI uses, without a second VapourSynth setup. Loaded defensively (missing/optional ones are skipped) -- see vpy_templates/_plugins.vpy.j2.",
     "vs_plugins": {

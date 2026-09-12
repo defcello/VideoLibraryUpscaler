@@ -30,6 +30,13 @@
             <label class="checkbox"><input type="checkbox" id="skip-upscale"> Skip Upscaling (deinterlace/IVTC only)</label>
         </div>
         <div class="field">
+            <label class="checkbox"><input type="checkbox" id="test-crop-enabled"> Test crop (In/Out points)</label>
+            <div id="test-crop-inputs" hidden style="margin-top:6px;display:flex;gap:8px">
+                <input type="text" id="test-crop-start" placeholder="In (HH:MM:SS)" style="width:120px">
+                <input type="text" id="test-crop-end" placeholder="Out (HH:MM:SS)" style="width:120px">
+            </div>
+        </div>
+        <div class="field">
             <label>Content type</label>
             <div class="preset-row">
                 <select id="content-type" style="flex:1"></select>
@@ -67,7 +74,11 @@
             <h3 id="detail-title">-</h3>
             <div class="sub" id="detail-id" style="color:var(--text-dim);font-size:11px"></div>
         </div>
-        <button class="close-btn" id="detail-close">&times;</button>
+        <div class="detail-actions">
+            <button class="icon-btn" id="detail-rerun" title="Rerun: duplicate this job's settings and queue a fresh run">&#8635;</button>
+            <button class="icon-btn" id="detail-abort" title="Abort this job">&#9632;</button>
+            <button class="close-btn" id="detail-close">&times;</button>
+        </div>
     </div>
     <div class="detail-body" id="detail-body"></div>
 </div>

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .. import db, naming
 from ..config import CONFIG
+from ..decoder_util import cuvid_decoder_args
 from ..metadata_tags import ffmpeg_metadata_args, processed_date
 from ..procutil import run_logged, run_piped_logged
 from ..vpy_render import render
@@ -84,7 +85,7 @@ def run(job_id: str) -> None:
         db.log(job_id, STAGE, f"skip_upscale: {summary}")
         meta = _build_terminal_metadata(job, settings, summary)
         cmd = [
-            FFMPEG, "-hide_banner", "-y", "-i", str(src),
+            FFMPEG, "-hide_banner", "-y", *cuvid_decoder_args(src), "-i", str(src),
             "-c", "copy", *ffmpeg_metadata_args(meta),
             str(out_path),
         ]
@@ -129,7 +130,11 @@ def run(job_id: str) -> None:
     ffmpeg_cmd = [
         FFMPEG, "-hide_banner", "-y",
         "-f", "yuv4mpegpipe", "-i", "-",
-        "-i", str(src),
+        # src is opened again here purely for its audio track (-map 1:a:0?
+        # below) -- still needs the cuvid decoder forced explicitly, same
+        # QSV-autopick gotcha as everywhere else Topaz's ffmpeg touches a
+        # real video codec (see decoder_util.py).
+        *cuvid_decoder_args(src), "-i", str(src),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr_hq", "-cq", "14", "-profile:v", "high",
         "-c:a", "copy",

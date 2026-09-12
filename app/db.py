@@ -27,7 +27,7 @@ STAGES = [
     "upscaled",
     "finalized",
 ]
-TERMINAL_STATES = {"finalized", "failed", "needs_review"}
+TERMINAL_STATES = {"finalized", "failed", "needs_review", "cancelled"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     denoise_tune          TEXT NOT NULL DEFAULT 'none',
     topaz_preset           TEXT NOT NULL DEFAULT 'topaz_default',
     skip_upscale            INTEGER NOT NULL DEFAULT 0,
+    crop_start_seconds      REAL,
+    crop_end_seconds        REAL,
+    failure_category        TEXT,                            -- 'oom' | 'disk_full' | NULL, set on status='failed'
     created_at             REAL NOT NULL,
     updated_at              REAL NOT NULL
 );
@@ -110,6 +113,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "skip_upscale" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN skip_upscale INTEGER NOT NULL DEFAULT 0")
+    if "crop_start_seconds" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN crop_start_seconds REAL")
+    if "crop_end_seconds" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN crop_end_seconds REAL")
+    if "failure_category" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN failure_category TEXT")
 
 
 def create_job(
@@ -120,6 +129,8 @@ def create_job(
     denoise_tune: str,
     topaz_preset: str,
     skip_upscale: bool = False,
+    crop_start_seconds: Optional[float] = None,
+    crop_end_seconds: Optional[float] = None,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
@@ -129,11 +140,13 @@ def create_job(
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
                 denoise_enabled, denoise_tune, topaz_preset, skip_upscale,
+                crop_start_seconds, crop_end_seconds,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job_id, original_nas_path, original_filename, working_name,
                 int(denoise_enabled), denoise_tune, topaz_preset, int(skip_upscale),
+                crop_start_seconds, crop_end_seconds,
                 now, now,
             ),
         )

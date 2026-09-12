@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -16,6 +17,40 @@ class CommandError(RuntimeError):
         self.returncode = returncode
         self.tail = tail
         super().__init__(f"Command failed ({returncode}): {' '.join(str(c) for c in cmd)}\n{tail}")
+
+
+# Tracks every subprocess currently owned by the (single) worker thread, so an
+# API request on a different thread (job abort) can forcefully kill whatever
+# the active job is running -- there's otherwise no way to interrupt a
+# subprocess.Popen.wait() from outside its own thread.
+_active_procs: list[subprocess.Popen] = []
+_active_procs_lock = threading.Lock()
+
+
+def _track(proc: subprocess.Popen) -> None:
+    with _active_procs_lock:
+        _active_procs.append(proc)
+
+
+def _untrack(proc: subprocess.Popen) -> None:
+    with _active_procs_lock:
+        if proc in _active_procs:
+            _active_procs.remove(proc)
+
+
+def kill_active() -> int:
+    """Best-effort force-kill of every currently-tracked subprocess (used for
+    job cancellation). Returns how many were signaled."""
+    with _active_procs_lock:
+        procs = list(_active_procs)
+    killed = 0
+    for p in procs:
+        try:
+            p.kill()
+            killed += 1
+        except Exception:
+            pass
+    return killed
 
 
 def run_logged(
@@ -43,18 +78,22 @@ def run_logged(
         errors="replace",
         bufsize=1,
     )
-    if input_data is not None:
-        proc.stdin.write(input_data.decode("utf-8", errors="replace"))
-        proc.stdin.close()
+    _track(proc)
+    try:
+        if input_data is not None:
+            proc.stdin.write(input_data.decode("utf-8", errors="replace"))
+            proc.stdin.close()
 
-    lines: list[str] = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        if line:
-            lines.append(line)
-            db.log(job_id, stage, line)
-    proc.wait()
+        lines: list[str] = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line:
+                lines.append(line)
+                db.log(job_id, stage, line)
+        proc.wait()
+    finally:
+        _untrack(proc)
 
     tail = "\n".join(lines[-80:])
     if proc.returncode != 0:
@@ -90,16 +129,22 @@ def run_piped_logged(
     assert proc_a.stdout is not None
     proc_a.stdout.close()  # let proc_b own the read end
 
-    lines: list[str] = []
-    assert proc_b.stdout is not None
-    for line in proc_b.stdout:
-        line = line.rstrip("\n")
-        if line:
-            lines.append(line)
-            db.log(job_id, stage, f"[out] {line}")
+    _track(proc_a)
+    _track(proc_b)
+    try:
+        lines: list[str] = []
+        assert proc_b.stdout is not None
+        for line in proc_b.stdout:
+            line = line.rstrip("\n")
+            if line:
+                lines.append(line)
+                db.log(job_id, stage, f"[out] {line}")
 
-    proc_b.wait()
-    proc_a.wait()
+        proc_b.wait()
+        proc_a.wait()
+    finally:
+        _untrack(proc_a)
+        _untrack(proc_b)
 
     a_err = proc_a.stderr.read().decode("utf-8", errors="replace") if proc_a.stderr else ""
     if a_err.strip():

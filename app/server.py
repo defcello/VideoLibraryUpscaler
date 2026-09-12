@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +50,8 @@ class CreateJobsRequest(BaseModel):
     denoise_enabled: bool = False
     content_type: str = load_preset("content_types")["default"]
     skip_upscale: bool = False
+    crop_start_seconds: Optional[float] = None
+    crop_end_seconds: Optional[float] = None
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -90,6 +94,10 @@ def api_create_jobs(req: CreateJobsRequest):
         raise HTTPException(400, f"unknown content_type: {req.content_type}")
     resolved = content_types[req.content_type]
 
+    if req.crop_start_seconds is not None and req.crop_end_seconds is not None:
+        if req.crop_end_seconds <= req.crop_start_seconds:
+            raise HTTPException(400, "crop end must be after crop start")
+
     created = []
     for p in req.paths:
         src = Path(p)
@@ -103,6 +111,8 @@ def api_create_jobs(req: CreateJobsRequest):
             denoise_tune=resolved["denoise_tune"],
             topaz_preset=resolved["topaz_preset"],
             skip_upscale=req.skip_upscale,
+            crop_start_seconds=req.crop_start_seconds,
+            crop_end_seconds=req.crop_end_seconds,
         )
         created.append(job_id)
     return {"created": created}
@@ -135,9 +145,54 @@ def api_delete_job(job_id: str):
     if row is None:
         raise HTTPException(404, "job not found")
     if row["status"] == "running":
-        raise HTTPException(400, "can't delete a job that's currently running -- wait for it to finish or fail first")
+        worker.request_cancel(job_id)
+        # kill_active() only signals the subprocess -- give the worker
+        # thread a brief moment to notice, record the cancellation, and let
+        # go of the job before we delete its row out from under it.
+        for _ in range(50):  # up to ~5s
+            time.sleep(0.1)
+            if worker.current_job_id() != job_id:
+                break
+    staging_dir = row["staging_dir"]
+    if staging_dir and Path(staging_dir).exists():
+        shutil.rmtree(staging_dir, ignore_errors=True)
     db.delete_job(job_id)
     return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/abort")
+def api_abort_job(job_id: str):
+    row = db.get_job(job_id)
+    if row is None:
+        raise HTTPException(404, "job not found")
+    if not worker.request_cancel(job_id):
+        raise HTTPException(400, "job is already finished -- nothing to abort")
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/rerun")
+def api_rerun_job(job_id: str):
+    """Duplicates a job's original submission parameters into a brand new
+    job and queues it immediately -- the original job (and its output, if
+    any) is left untouched."""
+    row = db.get_job(job_id)
+    if row is None:
+        raise HTTPException(404, "job not found")
+    src = Path(row["original_nas_path"])
+    if not src.exists():
+        raise HTTPException(400, f"original source no longer exists: {src}")
+    new_job_id = db.create_job(
+        original_nas_path=row["original_nas_path"],
+        original_filename=row["original_filename"],
+        working_name="",
+        denoise_enabled=bool(row["denoise_enabled"]),
+        denoise_tune=row["denoise_tune"],
+        topaz_preset=row["topaz_preset"],
+        skip_upscale=bool(row["skip_upscale"]),
+        crop_start_seconds=row["crop_start_seconds"],
+        crop_end_seconds=row["crop_end_seconds"],
+    )
+    return {"created": new_job_id}
 
 
 @app.post("/api/jobs/{job_id}/retry")
@@ -179,8 +234,31 @@ def _preset_display(preset: dict) -> dict:
     """Human-readable summary of a Topaz preset's processing stack, computed
     from the same logic upscale.py actually uses -- so the UI's preset panel
     can never drift out of sync with what a job would really do."""
-    scales = available_scales(preset["model"])
     enc = preset["encoder"]
+    if preset.get("engine") == "neuroserver":
+        # Generative (Starlight) presets use a completely different engine
+        # (neuroserver.exe, not ffmpeg's tvai_up) -- available_scales() /
+        # describe_upscale_strategy() assume the classic tvai_up model JSON
+        # shape and don't apply here (astrasharp.json's own "scales" field is
+        # actually misleading for this model -- see topaz_film_generative.json).
+        return {
+            "model_label": f"{preset['model_display_name']} ({preset['ai_model_label']} → {preset['model_variant_label']})",
+            "target_tier": f"{preset['output_tier_height']}p or higher",
+            "available_scales": None,
+            "upscale_strategy": (
+                "Single-pass generative upscale: requests the smallest integer scale "
+                "that reaches the target tier (e.g. 3x for a 480p source). The actual "
+                "output height is measured from the result rather than assumed, since "
+                "this model's real output can land below the nominally requested scale."
+            ),
+            "precleanup_enabled": False,
+            "precleanup_label": None,
+            "resize_flags": None,
+            "encoder_label": "Topaz-managed (neuroserver internal encode, see preset's ffmpeg_encoding)",
+            "container": enc["container"].upper(),
+            "audio_mode": enc["audio_mode"],
+        }
+    scales = available_scales(preset["model"])
     pc = preset.get("precleanup", {})
     return {
         "model_label": f"{preset['model_display_name']} ({preset['model']})",

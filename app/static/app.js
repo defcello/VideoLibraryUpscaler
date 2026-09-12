@@ -94,7 +94,9 @@ function renderPresetDetails() {
     html += `<div class="stack-row"><span class="stack-label">Upscale strategy</span></div>`;
     html += `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`;
     html += row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
-    html += row("Resize filter", `${escapeHtml(d.resize_flags)} <span class="stack-note-inline">(avoids ringing/haloing on hard edges)</span>`);
+    if (d.resize_flags) {
+        html += row("Resize filter", `${escapeHtml(d.resize_flags)} <span class="stack-note-inline">(avoids ringing/haloing on hard edges)</span>`);
+    }
     html += row("Denoise tune", escapeHtml(tune.label));
     html += row("Encoder", escapeHtml(d.encoder_label));
     html += row("Container", escapeHtml(d.container));
@@ -111,8 +113,40 @@ function togglePresetDetails() {
     if (!panel.hidden) renderPresetDetails();
 }
 
+// Parses "HH:MM:SS", "MM:SS", or a bare seconds value into total seconds.
+// Returns null for blank input, throws for anything else unparseable.
+function parseTimecode(text) {
+    text = (text || "").trim();
+    if (!text) return null;
+    const parts = text.split(":").map(p => p.trim());
+    if (parts.some(p => p === "" || isNaN(Number(p)))) {
+        throw new Error(`Invalid timecode: "${text}"`);
+    }
+    const nums = parts.map(Number);
+    if (nums.length === 1) return nums[0];
+    if (nums.length === 2) return nums[0] * 60 + nums[1];
+    if (nums.length === 3) return nums[0] * 3600 + nums[1] * 60 + nums[2];
+    throw new Error(`Invalid timecode: "${text}"`);
+}
+
+function getCropRange() {
+    if (!document.getElementById("test-crop-enabled").checked) return { start: null, end: null };
+    const start = parseTimecode(document.getElementById("test-crop-start").value);
+    const end = parseTimecode(document.getElementById("test-crop-end").value);
+    if (start === null || end === null) throw new Error("Enter both an In and an Out point for the test crop.");
+    if (end <= start) throw new Error("Test crop Out point must be after the In point.");
+    return { start, end };
+}
+
 async function submitJobs() {
     if (selected.size === 0) { alert("Select at least one file first."); return; }
+    let crop;
+    try {
+        crop = getCropRange();
+    } catch (e) {
+        alert(e.message);
+        return;
+    }
     await api("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -121,11 +155,19 @@ async function submitJobs() {
             denoise_enabled: document.getElementById("denoise-enabled").checked,
             content_type: document.getElementById("content-type").value,
             skip_upscale: document.getElementById("skip-upscale").checked,
+            crop_start_seconds: crop.start,
+            crop_end_seconds: crop.end,
         }),
     });
     selected.clear();
     document.getElementById("selected-count").textContent = "none selected";
     loadBrowse(browsePath);
+}
+
+function initTestCropToggle() {
+    const cb = document.getElementById("test-crop-enabled");
+    const inputs = document.getElementById("test-crop-inputs");
+    cb.onchange = () => { inputs.hidden = !cb.checked; };
 }
 
 // "Skip Upscaling" remembers its last state across sessions (per-viewer
@@ -153,6 +195,12 @@ function stageTrack(job) {
     }).join("");
 }
 
+function statusLabel(job) {
+    if (job.status === "failed" && job.failure_category === "oom") return "FAILED (OOM)";
+    if (job.status === "failed" && job.failure_category === "disk_full") return "FAILED (Disk Full)";
+    return job.status.replace(/_/g, " ");
+}
+
 function settingsSummary(job) {
     const s = job.settings || {};
     const bits = [];
@@ -173,16 +221,15 @@ function renderJobs(jobs) {
         tr.className = "job-row" + (job.id === openDetailId ? " selected" : "");
         tr.onclick = () => openDetail(job.id);
         const displayName = (job.settings && job.settings.display_filename) || job.original_filename;
-        const canDelete = job.status !== "running";
+        const isRunning = job.status === "running";
         tr.innerHTML = `
             <td class="filename" title="${displayName}">${displayName}</td>
-            <td><span class="badge ${job.status}">${job.status}</span></td>
+            <td><span class="badge ${job.status}">${statusLabel(job)}</span></td>
             <td><div class="stage-track">${stageTrack(job)}</div></td>
             <td style="color:var(--text-dim);font-size:12px">${settingsSummary(job)}</td>
             <td style="color:var(--text-dim);font-size:12px">${new Date(job.updated_at * 1000).toLocaleString()}</td>
             <td>
-                <button class="small delete-btn" title="${canDelete ? "Delete this record" : "Can't delete a running job"}"
-                    ${canDelete ? "" : "disabled"}>&times;</button>
+                <button class="small delete-btn" title="${isRunning ? "Abort and delete this job" : "Delete this record"}">&times;</button>
             </td>
         `;
         tr.querySelector(".delete-btn").onclick = (e) => {
@@ -198,9 +245,11 @@ function renderJobs(jobs) {
 async function deleteJob(jobId) {
     const job = jobsById[jobId];
     const name = (job && job.settings && job.settings.display_filename) || (job && job.original_filename) || jobId;
-    if (!confirm(`Remove this record from the queue?\n\n${name}\n\n(This only clears the dashboard entry -- any output file already on disk is untouched.)`)) {
-        return;
-    }
+    const isRunning = job && job.status === "running";
+    const prompt = isRunning
+        ? `This job is currently running -- abort it and remove it from the queue?\n\n${name}\n\n(Any partial/staged files for it are cleaned up. No finished output exists yet.)`
+        : `Remove this record from the queue?\n\n${name}\n\n(This only clears the dashboard entry -- any output file already on disk is untouched.)`;
+    if (!confirm(prompt)) return;
     try {
         await api(`/api/jobs/${jobId}`, { method: "DELETE" });
     } catch (e) {
@@ -208,6 +257,29 @@ async function deleteJob(jobId) {
         return;
     }
     if (openDetailId === jobId) closeDetail();
+}
+
+async function rerunJob(jobId) {
+    try {
+        await api(`/api/jobs/${jobId}/rerun`, { method: "POST" });
+    } catch (e) {
+        alert("Couldn't queue a rerun: " + e.message);
+        return;
+    }
+    refreshDetail();
+}
+
+async function abortJob(jobId) {
+    const job = jobsById[jobId];
+    const name = (job && job.settings && job.settings.display_filename) || (job && job.original_filename) || jobId;
+    if (!confirm(`Abort this job?\n\n${name}`)) return;
+    try {
+        await api(`/api/jobs/${jobId}/abort`, { method: "POST" });
+    } catch (e) {
+        alert("Couldn't abort: " + e.message);
+        return;
+    }
+    refreshDetail();
 }
 
 async function openDetail(jobId) {
@@ -236,7 +308,27 @@ async function refreshDetail() {
     document.getElementById("detail-title").textContent = displayName;
     document.getElementById("detail-id").textContent = `${job.id} · ${job.original_nas_path}`;
 
+    const abortBtn = document.getElementById("detail-abort");
+    const canAbort = job.status === "running" || job.status === "pending";
+    abortBtn.disabled = !canAbort;
+    abortBtn.onclick = canAbort ? () => abortJob(job.id) : null;
+    document.getElementById("detail-rerun").onclick = () => rerunJob(job.id);
+
     let html = "";
+
+    const outputName = job.current_file ? job.current_file.split(/[\\/]/).pop() : null;
+    html += `<div class="stack-row"><span class="stack-label">Output file name</span></div>`;
+    html += `<div class="stack-note" style="margin-bottom:12px">${outputName ? escapeHtml(outputName) : "(not yet produced)"}</div>`;
+
+    html += `<div class="stage-list">` + STAGES.map((s, i) => {
+        const curIdx = STAGES.indexOf(job.stage);
+        const isDone = job.status === "done" || i < curIdx;
+        const isCurrent = i === curIdx && job.status === "running";
+        const cls = isDone ? "done" : (isCurrent ? "current" : "pending");
+        const dotCls = isDone ? "done" : (isCurrent ? "current" : "");
+        const label = isCurrent ? `${s} (running)` : (isDone ? `${s} (done)` : s);
+        return `<div class="stage-list-row ${cls}"><span class="stage-dot ${dotCls}"></span>${escapeHtml(label)}</div>`;
+    }).join("") + `</div>`;
 
     if (job.status === "failed" && job.error_message) {
         html += `<div class="error-box">${escapeHtml(job.error_message)}</div>`;
@@ -324,6 +416,7 @@ document.getElementById("content-type").onchange = () => {
 };
 
 initSkipUpscaleCheckbox();
+initTestCropToggle();
 loadPresets();
 loadBrowse(null);
 connectStream();
