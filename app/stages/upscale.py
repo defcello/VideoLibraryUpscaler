@@ -61,20 +61,36 @@ def _available_scales(model: str) -> list[int]:
     return [1, 2, 3, 4]  # fallback if the model json is missing/unreadable
 
 
-def _integer_ai_scale(source_h: int, target_h: int, model: str) -> int:
+def _build_scale_passes(source_h: int, target_h: int, model: str) -> list[int]:
     """tvai_up's `scale` is a coarse integer AI upscale factor -- NOT the same
     thing as its `w`/`h` params, which are only "estimate" hints used for
     auto-picking a scale when `estimate` sampling is enabled, and do nothing
     to the actual output size on their own (confirmed by testing: passing w/h
-    alone left output at the source resolution, scale=1 default). We pick the
-    smallest available scale that covers the requested tier, then a separate
-    `scale=` filter resizes to the exact target dimensions."""
-    if target_h <= source_h:
-        return 1
-    needed = target_h / source_h
+    alone left output at the source resolution, scale=1 default).
+
+    Returns the list of scale factors to run tvai_up with IN SEQUENCE. If a
+    single available scale covers the requested tier, that's one pass (e.g.
+    gcg-5 covers a 2.25x need with one scale=4 pass). If the model's largest
+    scale doesn't cover it alone (e.g. ganim-1 only offers 2x), we chain that
+    largest scale repeatedly -- two 2x AI passes for a ~4x need -- rather
+    than falling back to a plain (non-AI) resize for the remainder. A final
+    `scale=` filter still resizes to the exact target dimensions afterward."""
     options = _available_scales(model)
+    if target_h <= source_h:
+        return [1] if 1 in options else []
+
+    needed = target_h / source_h
     covering = [s for s in options if s >= needed]
-    return min(covering) if covering else max(options)
+    if covering:
+        return [min(covering)]
+
+    largest = max(options)
+    passes: list[int] = []
+    cumulative = 1.0
+    while cumulative < needed and len(passes) < 3:
+        passes.append(largest)
+        cumulative *= largest
+    return passes
 
 
 def run(job_id: str) -> None:
@@ -87,9 +103,9 @@ def run(job_id: str) -> None:
     width, height = _current_dims(src)
     target_h = preset["output_tier_height"]
     target_w = int(round(width * target_h / height / 2) * 2)
-    ai_scale = _integer_ai_scale(height, target_h, preset["model"])
+    scale_passes = _build_scale_passes(height, target_h, preset["model"])
     db.log(job_id, STAGE, f"source {width}x{height} -> target {target_w}x{target_h} "
-                          f"(model={preset['model']}, tvai scale={ai_scale}x, then exact resize)")
+                          f"(model={preset['model']}, scale passes={scale_passes or 'none'}, then exact resize)")
 
     filters = []
     if preset.get("precleanup", {}).get("enabled"):
@@ -98,8 +114,9 @@ def run(job_id: str) -> None:
         filters.append(f"tvai_up={_tvai_params(pc_params)}")
         db.log(job_id, STAGE, f"precleanup enabled: model={pc['model']}")
 
-    up_params = {"model": preset["model"], "scale": ai_scale, **preset["tvai_up_params"]}
-    filters.append(f"tvai_up={_tvai_params(up_params)}")
+    for s in scale_passes:
+        up_params = {"model": preset["model"], "scale": s, **preset["tvai_up_params"]}
+        filters.append(f"tvai_up={_tvai_params(up_params)}")
     # tvai_up's scale is a coarse integer AI factor -- resize precisely to the
     # requested tier afterward. lanczos rings/haloes on hard edges (a likely
     # contributor to edge ghosting on flat-color animation), so presets

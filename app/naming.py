@@ -7,10 +7,13 @@ through the pipeline:
     Show S01E01 [DVD] [480i].mkv
         -> deinterlace ->  Show S01E01 [DVD] [480p].mkv
         -> denoise (opt) -> Show S01E01 [DVD] [480p Denoised].mkv
-        -> upscale ->       Show S01E01 [DVD] [Upscaled 1080p].mkv
+        -> upscale ->       Show S01E01 [Upscaled 1080p].mkv
 
-Only the status tag (matching RES_TAG_RE) is touched; any other bracket tag
-(e.g. [DVD]) passes through unchanged and in its original position.
+Through deinterlace/denoise, only the status tag (matching RES_TAG_RE) is
+touched -- other bracket tags (e.g. [DVD]) pass through unchanged. At the
+final upscale step the whole tag list is replaced by the single "Upscaled
+Np" tag -- the source-type/interim tags are no longer relevant once the
+deliverable exists.
 """
 from __future__ import annotations
 
@@ -72,9 +75,10 @@ def add_denoised_tag(filename: str) -> str:
 
 
 def set_upscaled_tag(filename: str, height: int) -> str:
-    base, tags, ext = split_tags(filename)
-    tags = _replace_status_tag(tags, f"Upscaled {height}p")
-    return join_tags(base, tags, ext)
+    """The final delivered filename keeps only the Upscaled tag -- source-type
+    tags like [DVD]/[Bluray] and interim ones like [Denoised] are dropped."""
+    base, _tags, ext = split_tags(filename)
+    return join_tags(base, [f"Upscaled {height}p"], ext)
 
 
 def detect_source_scan_hint(filename: str) -> str | None:
