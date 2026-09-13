@@ -25,7 +25,7 @@ from pathlib import Path
 from .. import db, naming
 from ..config import CONFIG, load_preset
 from ..decoder_util import cuvid_decoder_args
-from ..procutil import run_logged
+from ..procutil import ffmpeg_time_progress, run_logged
 
 STAGE = "dehaloed"
 
@@ -94,7 +94,8 @@ def run(job_id: str) -> None:
         "-c:a", "copy",
         str(out_path),
     ]
-    run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]})
+    run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]},
+               progress=ffmpeg_time_progress(settings.get("duration")))
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("dehalo stage produced no output file")

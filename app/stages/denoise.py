@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .. import db, naming
 from ..config import CONFIG, load_preset
-from ..procutil import run_logged
+from ..procutil import handbrake_percent_progress, run_logged
 
 STAGE = "denoised"
 
@@ -47,7 +47,7 @@ def run(job_id: str) -> None:
         "--all-audio", "-E", "copy",
     ]
     db.log(job_id, STAGE, f"denoise tune={tune_key} ({tune['label']})")
-    run_logged(job_id, STAGE, cmd)
+    run_logged(job_id, STAGE, cmd, progress=handbrake_percent_progress())
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("denoise stage produced no output file")

@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     crop_start_seconds      REAL,
     crop_end_seconds        REAL,
     failure_category        TEXT,                            -- 'oom' | 'disk_full' | NULL, set on status='failed'
+    progress_percent        REAL,                             -- 0-100 within the currently-running stage, NULL if unknown
     created_at             REAL NOT NULL,
     updated_at              REAL NOT NULL
 );
@@ -126,6 +127,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN deinterlace_enabled INTEGER NOT NULL DEFAULT 1")
     if "dehalo_enabled" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN dehalo_enabled INTEGER NOT NULL DEFAULT 0")
+    if "progress_percent" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN progress_percent REAL")
 
 
 def create_job(

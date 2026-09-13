@@ -25,7 +25,7 @@ from pathlib import Path
 from .. import db, naming
 from ..config import CONFIG
 from ..decoder_util import cuvid_decoder_args
-from ..procutil import run_logged, run_piped_logged
+from ..procutil import ffmpeg_time_progress, run_logged, run_piped_logged
 from ..vpy_render import render
 
 STAGE = "deinterlaced"
@@ -74,7 +74,7 @@ def run(job_id: str) -> None:
             "-c", "copy",
             str(out_path),
         ]
-        run_logged(job_id, STAGE, cmd)
+        run_logged(job_id, STAGE, cmd, progress=ffmpeg_time_progress(settings.get("duration")))
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("deinterlace stage (stream copy) produced no output file")
         new_name = naming.set_progressive_tag(job["original_filename"], height)
@@ -124,7 +124,7 @@ def run(job_id: str) -> None:
 
     vspipe_cmd = [VSPIPE, str(script_path), "-", "-c", "y4m"]
 
-    run_piped_logged(job_id, STAGE, vspipe_cmd, ffmpeg_cmd)
+    run_piped_logged(job_id, STAGE, vspipe_cmd, ffmpeg_cmd, progress=ffmpeg_time_progress(settings.get("duration")))
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("deinterlace stage produced no output file")

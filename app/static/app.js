@@ -1,5 +1,7 @@
 const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "dehaloed", "upscaled", "finalized"];
 
+const TRASH_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>`;
+
 let browsePath = null;
 let selected = new Set();
 let presets = null;
@@ -216,14 +218,33 @@ function runningStageIndex(job) {
     return Math.min(lastDoneIdx + 1, STAGES.length - 1);
 }
 
+// Which enabled/toggle flag governs whether STAGES[i] actually ran anything,
+// or was completed as an instant no-op passthrough (see each stages/*.py's
+// own "disabled -- passing through unchanged" branch).
+function isStageSkipped(job, i) {
+    switch (STAGES[i]) {
+        case "deinterlaced": return !job.deinterlace_enabled;
+        case "denoised": return !job.denoise_enabled;
+        case "dehaloed": return !job.dehalo_enabled;
+        case "upscaled": return !!job.skip_upscale;
+        default: return false;
+    }
+}
+
 function stageTrack(job) {
     const lastDoneIdx = STAGES.indexOf(job.stage);
     const runningIdx = runningStageIndex(job);
     const isDone = job.status === "done";
     return STAGES.map((s, i) => {
+        if (!isDone && i === runningIdx && job.status === "running") {
+            const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
+            return `<span class="stage-dot current" title="${s}: ${pct.toFixed(0)}%">
+                <span class="stage-dot-fill" style="width:${pct}%"></span>
+                <span class="stage-dot-label">${pct.toFixed(0)}%</span>
+            </span>`;
+        }
         let cls = "stage-dot";
         if (i <= lastDoneIdx || isDone) cls += " done";
-        else if (i === runningIdx && job.status === "running") cls += " current";
         return `<span class="${cls}" title="${s}"></span>`;
     }).join("");
 }
@@ -262,7 +283,7 @@ function renderJobs(jobs) {
             <td style="color:var(--text-dim);font-size:12px">${settingsSummary(job)}</td>
             <td style="color:var(--text-dim);font-size:12px">${new Date(job.updated_at * 1000).toLocaleString()}</td>
             <td>
-                <button class="small delete-btn" title="${isRunning ? "Abort and delete this job" : "Delete this record"}">&times;</button>
+                <button class="small delete-btn" title="${isRunning ? "Abort and delete this job" : "Delete this record"}">${TRASH_ICON}</button>
             </td>
         `;
         tr.querySelector(".delete-btn").onclick = (e) => {
@@ -346,6 +367,7 @@ async function refreshDetail() {
     abortBtn.disabled = !canAbort;
     abortBtn.onclick = canAbort ? () => abortJob(job.id) : null;
     document.getElementById("detail-rerun").onclick = () => rerunJob(job.id);
+    document.getElementById("detail-delete").onclick = () => deleteJob(job.id);
 
     let html = "";
 
@@ -360,7 +382,17 @@ async function refreshDetail() {
         const isCurrent = i === runningIdx && job.status === "running";
         const cls = isDone ? "done" : (isCurrent ? "current" : "pending");
         const dotCls = isDone ? "done" : (isCurrent ? "current" : "");
-        const label = isCurrent ? `${s} (running)` : (isDone ? `${s} (done)` : s);
+        let label;
+        if (isCurrent) {
+            const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
+            label = `${s} (running ${pct.toFixed(0)}%)`;
+        } else if (isDone && isStageSkipped(job, i)) {
+            label = `${s} (skipped)`;
+        } else if (isDone) {
+            label = `${s} (done 100%)`;
+        } else {
+            label = s;
+        }
         return `<div class="stage-list-row ${cls}"><span class="stage-dot ${dotCls}"></span>${escapeHtml(label)}</div>`;
     }).join("") + `</div>`;
 

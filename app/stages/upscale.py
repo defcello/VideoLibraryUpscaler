@@ -29,7 +29,7 @@ from typing import Optional
 from .. import db, naming
 from ..config import CONFIG, load_preset
 from ..decoder_util import cuvid_decoder_args
-from ..procutil import CommandError, run_logged
+from ..procutil import CommandError, ffmpeg_time_progress, run_logged
 from ..topaz_models import build_scale_passes
 
 STAGE = "upscaled"
@@ -129,7 +129,8 @@ def run(job_id: str) -> None:
         "-c:a", preset["encoder"]["audio_mode"],
         str(out_path),
     ]
-    run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]})
+    run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]},
+               progress=ffmpeg_time_progress(settings.get("duration")))
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("upscale stage produced no output file")

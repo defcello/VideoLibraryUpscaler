@@ -76,7 +76,7 @@ def _process_one(job_row) -> None:
         db.update_job(job_id, status="failed", error_message=f"no runner for stage '{stage}'")
         return
 
-    db.update_job(job_id, status="running", error_message=None, failure_category=None)
+    db.update_job(job_id, status="running", error_message=None, failure_category=None, progress_percent=0)
     db.log(job_id, stage, f"--- starting stage after '{stage}' ---")
     try:
         runner(job_id)
