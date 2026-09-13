@@ -9,14 +9,15 @@ import time
 import traceback
 
 from . import db, procutil
-from .stages import deinterlace, denoise, finalize, ingest, probe, upscale
+from .stages import deinterlace, dehalo, denoise, finalize, ingest, probe, upscale
 
 STAGE_RUNNERS = {
     "queued": ingest.run,
     "staged": probe.run,
     "probed": deinterlace.run,
     "deinterlaced": denoise.run,
-    "denoised": upscale.run,
+    "denoised": dehalo.run,
+    "dehaloed": upscale.run,
     "upscaled": finalize.run,
 }
 

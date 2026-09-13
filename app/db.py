@@ -24,6 +24,7 @@ STAGES = [
     "probed",
     "deinterlaced",
     "denoised",
+    "dehaloed",
     "upscaled",
     "finalized",
 ]
@@ -42,7 +43,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     current_file        TEXT,                              -- path to the latest-good intermediate/output
     settings_json        TEXT NOT NULL DEFAULT '{}',        -- detected + chosen settings, merged over stages
     error_message        TEXT,
+    deinterlace_enabled   INTEGER NOT NULL DEFAULT 1,
     denoise_enabled       INTEGER NOT NULL DEFAULT 0,
+    dehalo_enabled        INTEGER NOT NULL DEFAULT 0,
     denoise_tune          TEXT NOT NULL DEFAULT 'none',
     topaz_preset           TEXT NOT NULL DEFAULT 'topaz_default',
     skip_upscale            INTEGER NOT NULL DEFAULT 0,
@@ -119,6 +122,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN crop_end_seconds REAL")
     if "failure_category" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN failure_category TEXT")
+    if "deinterlace_enabled" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN deinterlace_enabled INTEGER NOT NULL DEFAULT 1")
+    if "dehalo_enabled" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN dehalo_enabled INTEGER NOT NULL DEFAULT 0")
 
 
 def create_job(
@@ -129,6 +136,8 @@ def create_job(
     denoise_tune: str,
     topaz_preset: str,
     skip_upscale: bool = False,
+    deinterlace_enabled: bool = True,
+    dehalo_enabled: bool = False,
     crop_start_seconds: Optional[float] = None,
     crop_end_seconds: Optional[float] = None,
 ) -> str:
@@ -139,13 +148,15 @@ def create_job(
             """INSERT INTO jobs (
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
-                denoise_enabled, denoise_tune, topaz_preset, skip_upscale,
+                deinterlace_enabled, denoise_enabled, denoise_tune, dehalo_enabled,
+                topaz_preset, skip_upscale,
                 crop_start_seconds, crop_end_seconds,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job_id, original_nas_path, original_filename, working_name,
-                int(denoise_enabled), denoise_tune, topaz_preset, int(skip_upscale),
+                int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(dehalo_enabled),
+                topaz_preset, int(skip_upscale),
                 crop_start_seconds, crop_end_seconds,
                 now, now,
             ),

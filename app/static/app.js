@@ -1,4 +1,4 @@
-const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "upscaled", "finalized"];
+const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "dehaloed", "upscaled", "finalized"];
 
 let browsePath = null;
 let selected = new Set();
@@ -152,9 +152,14 @@ async function submitJobs() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             paths: Array.from(selected),
+            deinterlace_enabled: document.getElementById("deinterlace-enabled").checked,
             denoise_enabled: document.getElementById("denoise-enabled").checked,
+            dehalo_enabled: document.getElementById("dehalo-enabled").checked,
             content_type: document.getElementById("content-type").value,
-            skip_upscale: document.getElementById("skip-upscale").checked,
+            // The API's "skip_upscale" field predates the toggle stack and is
+            // kept internally (server/db) to avoid a schema rename -- the UI
+            // now shows its inverse as an "Upscale" toggle.
+            skip_upscale: !document.getElementById("upscale-enabled").checked,
             crop_start_seconds: crop.start,
             crop_end_seconds: crop.end,
         }),
@@ -170,16 +175,27 @@ function initTestCropToggle() {
     cb.onchange = () => { inputs.hidden = !cb.checked; };
 }
 
-// "Skip Upscaling" remembers its last state across sessions (per-viewer
-// convenience, not something the server needs to track).
-function initSkipUpscaleCheckbox() {
-    const cb = document.getElementById("skip-upscale");
-    try {
-        cb.checked = localStorage.getItem("skipUpscale") === "true";
-    } catch (e) { /* private browsing etc -- default unchecked */ }
-    cb.onchange = () => {
-        try { localStorage.setItem("skipUpscale", cb.checked); } catch (e) { /* ignore */ }
-    };
+// Each toggle in the processing stack remembers its last state across
+// sessions (per-viewer convenience, not something the server needs to
+// track) -- id -> [localStorage key, default checked state].
+const TOGGLE_STACK = {
+    "deinterlace-enabled": ["deinterlaceEnabled", true],
+    "denoise-enabled": ["denoiseEnabled", false],
+    "dehalo-enabled": ["dehaloEnabled", false],
+    "upscale-enabled": ["upscaleEnabled", true],
+};
+
+function initToggleStack() {
+    for (const [id, [key, defaultChecked]] of Object.entries(TOGGLE_STACK)) {
+        const cb = document.getElementById(id);
+        try {
+            const stored = localStorage.getItem(key);
+            cb.checked = stored === null ? defaultChecked : stored === "true";
+        } catch (e) { cb.checked = defaultChecked; /* private browsing etc */ }
+        cb.onchange = () => {
+            try { localStorage.setItem(key, cb.checked); } catch (e) { /* ignore */ }
+        };
+    }
 }
 
 // --------------------------------------------------------------- job table
@@ -415,7 +431,7 @@ document.getElementById("content-type").onchange = () => {
     if (!document.getElementById("preset-details").hidden) renderPresetDetails();
 };
 
-initSkipUpscaleCheckbox();
+initToggleStack();
 initTestCropToggle();
 loadPresets();
 loadBrowse(null);

@@ -74,6 +74,17 @@ def add_denoised_tag(filename: str) -> str:
     return join_tags(base, out, ext)
 
 
+def add_dehalo_tag(filename: str) -> str:
+    base, tags, ext = split_tags(filename)
+    out = []
+    for t in tags:
+        if RES_TAG_RE.match(t.strip()) and "dehalo" not in t.lower() and not t.lower().startswith("upscaled"):
+            out.append(f"{t} Dehalo")
+        else:
+            out.append(t)
+    return join_tags(base, out, ext)
+
+
 def set_upscaled_tag(filename: str, height: int) -> str:
     """The final delivered filename keeps only the Upscaled tag -- source-type
     tags like [DVD]/[Bluray] and interim ones like [Denoised] are dropped."""
@@ -81,12 +92,16 @@ def set_upscaled_tag(filename: str, height: int) -> str:
     return join_tags(base, [f"Upscaled {height}p"], ext)
 
 
-def set_final_progressive_tag(filename: str, height: int) -> str:
-    """Terminal filename for skip-upscale (deinterlace-only) jobs: keeps only
-    the plain resolution tag, e.g. '[480p]' -- source-type tags like
-    [DVD]/[Bluray] are dropped, same rationale as set_upscaled_tag."""
+def set_final_progressive_tag(filename: str, height: int, extra: list[str] | None = None) -> str:
+    """Terminal filename for a job that never reached the Upscale stage: a
+    plain resolution tag (e.g. '[480p]') plus any of the stage suffixes that
+    actually applied (e.g. '[480p Dehalo]', '[480p Denoised Dehalo]') -- via
+    `extra`, since with Denoise/Dehalo/Upscale as independent toggles there's
+    no later stage to make an interim tag redundant the way `set_upscaled_tag`
+    assumes. Source-type tags like [DVD]/[Bluray] are still dropped."""
     base, _tags, ext = split_tags(filename)
-    return join_tags(base, [f"{height}p"], ext)
+    tag = " ".join([f"{height}p", *(extra or [])])
+    return join_tags(base, [tag], ext)
 
 
 def has_progressive_res_tag(filename: str) -> bool:

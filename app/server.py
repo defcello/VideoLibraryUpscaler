@@ -47,7 +47,9 @@ def _startup() -> None:
 
 class CreateJobsRequest(BaseModel):
     paths: list[str]
+    deinterlace_enabled: bool = True
     denoise_enabled: bool = False
+    dehalo_enabled: bool = False
     content_type: str = load_preset("content_types")["default"]
     skip_upscale: bool = False
     crop_start_seconds: Optional[float] = None
@@ -107,7 +109,9 @@ def api_create_jobs(req: CreateJobsRequest):
             original_nas_path=str(src),
             original_filename=src.name,
             working_name="",  # filled in by the ingest stage
+            deinterlace_enabled=req.deinterlace_enabled,
             denoise_enabled=req.denoise_enabled,
+            dehalo_enabled=req.dehalo_enabled,
             denoise_tune=resolved["denoise_tune"],
             topaz_preset=resolved["topaz_preset"],
             skip_upscale=req.skip_upscale,
@@ -185,7 +189,9 @@ def api_rerun_job(job_id: str):
         original_nas_path=row["original_nas_path"],
         original_filename=row["original_filename"],
         working_name="",
+        deinterlace_enabled=bool(row["deinterlace_enabled"]),
         denoise_enabled=bool(row["denoise_enabled"]),
+        dehalo_enabled=bool(row["dehalo_enabled"]),
         denoise_tune=row["denoise_tune"],
         topaz_preset=row["topaz_preset"],
         skip_upscale=bool(row["skip_upscale"]),

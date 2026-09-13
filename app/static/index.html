@@ -24,17 +24,17 @@
         </div>
 
         <div class="field">
-            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Denoise (HandBrake NLMeans Strong)</label>
-        </div>
-        <div class="field">
-            <label class="checkbox"><input type="checkbox" id="skip-upscale"> Skip Upscaling (deinterlace/IVTC only)</label>
-        </div>
-        <div class="field">
             <label class="checkbox"><input type="checkbox" id="test-crop-enabled"> Test crop (In/Out points)</label>
             <div id="test-crop-inputs" hidden style="margin-top:6px;display:flex;gap:8px">
                 <input type="text" id="test-crop-start" placeholder="In (HH:MM:SS)" style="width:120px">
                 <input type="text" id="test-crop-end" placeholder="Out (HH:MM:SS)" style="width:120px">
             </div>
+        </div>
+        <div class="field toggle-stack">
+            <label class="checkbox"><input type="checkbox" id="deinterlace-enabled"> Deinterlace/IVTC</label>
+            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Denoise (HandBrake NLMeans Strong)</label>
+            <label class="checkbox"><input type="checkbox" id="dehalo-enabled"> Dehalo (Topaz Iris + Artemis Strong Halo)</label>
+            <label class="checkbox"><input type="checkbox" id="upscale-enabled"> Upscale (Topaz Video AI)</label>
         </div>
         <div class="field">
             <label>Content type</label>

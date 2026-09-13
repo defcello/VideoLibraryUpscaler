@@ -12,8 +12,10 @@ Model shortnames were confirmed against this machine's installed model JSONs
             reaching a 4x-ish tier chains two passes (see topaz_models.py).
   nyx-3   = "Nyx" pre-clean denoise, for heavily degraded sources.
 
-If the job's `skip_upscale` flag is set, this stage is a no-op (see
-deinterlace.py, which becomes the terminal stage in that mode instead).
+If the job's `skip_upscale` flag is set, this stage is a no-op -- independent
+of the other toggles now, unlike denoise/dehalo it doesn't cascade off of
+anything else. Final filename tagging and metadata embedding both happen
+unconditionally in finalize.py, not here.
 """
 from __future__ import annotations
 
@@ -27,7 +29,6 @@ from typing import Optional
 from .. import db, naming
 from ..config import CONFIG, load_preset
 from ..decoder_util import cuvid_decoder_args
-from ..metadata_tags import ffmpeg_metadata_args, processed_date
 from ..procutil import CommandError, run_logged
 from ..topaz_models import build_scale_passes
 
@@ -62,19 +63,13 @@ def _tvai_params(params: dict) -> str:
     return ":".join(f"{k}={v}" for k, v in params.items())
 
 
-def _scan_summary(settings: dict) -> str:
-    conf = settings.get("confidence")
-    conf_str = f"{conf:.2f}" if isinstance(conf, (int, float)) else "n/a"
-    return f"{settings.get('scan_type', '?')} (tff={settings.get('tff')}, confidence={conf_str})"
-
-
 def run(job_id: str) -> None:
     job = db.get_job(job_id)
     settings = db.get_settings(job_id)
     src = Path(job["current_file"])
 
     if job["skip_upscale"]:
-        db.log(job_id, STAGE, "skip_upscale set -- passing through unchanged (deinterlace.py is the terminal stage)")
+        db.log(job_id, STAGE, "skip_upscale set -- passing through unchanged")
         db.update_job(job_id, stage=STAGE, status="pending")
         return
 
@@ -118,16 +113,6 @@ def run(job_id: str) -> None:
     upscale_summary = (f"Topaz {preset['model_display_name']} ({preset['model']}), "
                        f"passes={scale_passes or 'none'}, target={target_w}x{target_h}, "
                        f"resize={resize_flags}")
-    meta = {
-        "TOOL": "AI Remaster Pipeline",
-        "SOURCE_FILE": job["original_filename"],
-        "SCAN_DETECTION": _scan_summary(settings),
-        "DEINTERLACE": settings.get("deinterlace_summary", "n/a"),
-        "DENOISE": settings.get("denoise_summary", "skipped"),
-        "UPSCALE": upscale_summary,
-        "ENCODER": f"{preset['encoder']['codec']} {preset['encoder']['profile']} cq={preset['encoder']['cq']}",
-        "PROCESSED": processed_date(),
-    }
 
     decoder_args = cuvid_decoder_args(src)
     cmd = [
@@ -142,7 +127,6 @@ def run(job_id: str) -> None:
         "-cq", str(preset["encoder"]["cq"]),
         "-profile:v", preset["encoder"]["profile"],
         "-c:a", preset["encoder"]["audio_mode"],
-        *ffmpeg_metadata_args(meta),
         str(out_path),
     ]
     run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]})
@@ -155,7 +139,11 @@ def run(job_id: str) -> None:
 
     db.log(job_id, STAGE, f"upscale complete -> {out_path}")
     db.update_job(job_id, stage=STAGE, status="pending", current_file=str(out_path))
-    db.merge_settings(job_id, {"display_filename": new_name, "upscaled_width": target_w, "upscaled_height": target_h})
+    db.merge_settings(job_id, {
+        "display_filename": new_name,
+        "upscaled_width": target_w, "upscaled_height": target_h,
+        "upscale_summary": upscale_summary,
+    })
 
 
 def _find_recovered_output(requested_out: Path) -> Optional[Path]:
@@ -273,16 +261,6 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
     out_path = src.with_name(src.stem + "_upscaled." + preset["encoder"]["container"])
     upscale_summary = (f"Topaz {preset['model_display_name']} ({preset['model']}), "
                        f"generative single-pass, requested {nominal_scale}x, result={out_w}x{out_h}")
-    meta = {
-        "TOOL": "AI Remaster Pipeline",
-        "SOURCE_FILE": job["original_filename"],
-        "SCAN_DETECTION": _scan_summary(settings),
-        "DEINTERLACE": settings.get("deinterlace_summary", "n/a"),
-        "DENOISE": settings.get("denoise_summary", "skipped"),
-        "UPSCALE": upscale_summary,
-        "ENCODER": preset["ffmpeg_encoding"],
-        "PROCESSED": processed_date(),
-    }
     # The recovered file has no audio (Topaz strips it before the failing
     # post-process step) -- remux the source's audio back in via a plain
     # stream copy (no re-encode, no decoder concerns either way).
@@ -292,7 +270,6 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
         "-i", str(src),
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c", "copy",
-        *ffmpeg_metadata_args(meta),
         str(out_path),
     ]
     db.log(job_id, STAGE, "muxing original audio back into the recovered generative output")
@@ -311,4 +288,8 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
 
     db.log(job_id, STAGE, f"generative upscale complete -> {out_path}")
     db.update_job(job_id, stage=STAGE, status="pending", current_file=str(out_path))
-    db.merge_settings(job_id, {"display_filename": new_name, "upscaled_width": out_w, "upscaled_height": out_h})
+    db.merge_settings(job_id, {
+        "display_filename": new_name,
+        "upscaled_width": out_w, "upscaled_height": out_h,
+        "upscale_summary": upscale_summary,
+    })

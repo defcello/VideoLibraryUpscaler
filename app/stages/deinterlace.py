@@ -7,20 +7,24 @@ ffmpeg. Also folds in PAR-to-square-pixels normalization and autodetected
 letterbox/pillarbox crop from Stage 1, per the "combine with an earlier step"
 allowance -- native aspect ratio is preserved, no forced 16:9 padding.
 
-When the job's `skip_upscale` flag is set, this becomes the TERMINAL stage
-(denoise and upscale both pass through unchanged -- see those stages' early
-returns): the output here gets the final filename tag and embedded metadata
-that upscale.py would otherwise be responsible for.
+Independent of the `skip_upscale` (Upscale toggle) flag -- each toggle in the
+processing stack controls only its own stage now (denoise/dehalo/upscale no
+longer cascade off of each other). Final filename tagging and metadata
+embedding both happen unconditionally in finalize.py, not here -- this stage
+just produces a plain progressive .mp4 mezzanine and records a summary in
+settings for finalize.py to read back later.
+
+When the job's `deinterlace_enabled` flag is unset, this stage is a no-op
+passthrough (same pattern as denoise/dehalo/upscale's own enabled checks) --
+the source file is used as-is by whatever stage runs next.
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from .. import db, naming
 from ..config import CONFIG
 from ..decoder_util import cuvid_decoder_args
-from ..metadata_tags import ffmpeg_metadata_args, processed_date
 from ..procutil import run_logged, run_piped_logged
 from ..vpy_render import render
 
@@ -45,54 +49,35 @@ def _no_normalize_needed(settings: dict) -> bool:
     return crop == (0, 0, 0, 0) and par[0] == par[1]
 
 
-def _scan_summary(scan_type: str, settings: dict) -> str:
-    conf = settings.get("confidence")
-    conf_str = f"{conf:.2f}" if isinstance(conf, (int, float)) else "n/a"
-    tff = settings.get("tff")
-    return f"{scan_type} (tff={tff}, confidence={conf_str})"
-
-
-def _build_terminal_metadata(job: dict, settings: dict, deinterlace_summary: str) -> dict:
-    return {
-        "TOOL": "AI Remaster Pipeline",
-        "SOURCE_FILE": job["original_filename"],
-        "SCAN_DETECTION": _scan_summary(settings.get("scan_type", "?"), settings),
-        "DEINTERLACE": deinterlace_summary,
-        "DENOISE": "skipped (skip_upscale mode)",
-        "UPSCALE": "skipped (skip_upscale mode)",
-        "PROCESSED": processed_date(),
-    }
-
-
 def run(job_id: str) -> None:
     job = db.get_job(job_id)
     settings = db.get_settings(job_id)
     src = Path(job["current_file"])
+
+    if not job["deinterlace_enabled"]:
+        db.log(job_id, STAGE, "deinterlace disabled for this job -- passing through unchanged")
+        db.update_job(job_id, stage=STAGE, status="pending")
+        db.merge_settings(job_id, {"deinterlace_summary": "skipped"})
+        return
+
     scan_type = settings.get("scan_type", "interlaced")
-    skip_upscale = bool(job["skip_upscale"])
     height = settings.get("height", 0)
 
-    # Fast path: skip-upscale mode, source already progressive, nothing to
-    # crop/PAR-normalize -- a genuine remux (stream copy), not a re-encode.
-    # Still routed through ffmpeg rather than a raw byte copy so we can tag
-    # the file with the processing metadata below.
-    if skip_upscale and scan_type == "progressive" and _no_normalize_needed(settings):
-        # .mkv regardless of the source's own container -- standardized
-        # delivery container, and matroska remuxes virtually any codec
-        # losslessly via -c copy.
-        out_path = src.with_name(src.stem + "_deint.mkv")
+    # Fast path: source already progressive, nothing to crop/PAR-normalize --
+    # a genuine remux (stream copy), not a re-encode through QTGMC/VIVTC.
+    if scan_type == "progressive" and _no_normalize_needed(settings):
+        out_path = src.with_name(src.stem + "_deint.mp4")
         summary = "already progressive, no crop/PAR change needed -- stream copy, no re-encode"
-        db.log(job_id, STAGE, f"skip_upscale: {summary}")
-        meta = _build_terminal_metadata(job, settings, summary)
+        db.log(job_id, STAGE, summary)
         cmd = [
             FFMPEG, "-hide_banner", "-y", *cuvid_decoder_args(src), "-i", str(src),
-            "-c", "copy", *ffmpeg_metadata_args(meta),
+            "-c", "copy",
             str(out_path),
         ]
         run_logged(job_id, STAGE, cmd)
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError("deinterlace stage (stream copy) produced no output file")
-        new_name = naming.set_final_progressive_tag(job["original_filename"], height)
+        new_name = naming.set_progressive_tag(job["original_filename"], height)
         db.log(job_id, STAGE, f"deinterlace complete (stream copy) -> {out_path}")
         db.update_job(job_id, stage=STAGE, status="pending", current_file=str(out_path))
         db.merge_settings(job_id, {"display_filename": new_name, "deinterlace_summary": summary})
@@ -121,11 +106,7 @@ def run(job_id: str) -> None:
     else:
         deinterlace_summary = "already progressive; PAR/crop normalize only"
 
-    # Non-terminal (feeds into denoise/upscale next) stays .mp4 as a plain
-    # mezzanine; terminal (skip_upscale) uses .mkv, the standardized
-    # delivery container.
-    out_ext = ".mkv" if skip_upscale else ".mp4"
-    out_path = src.with_name(src.stem + "_deint" + out_ext)
+    out_path = src.with_name(src.stem + "_deint.mp4")
 
     ffmpeg_cmd = [
         FFMPEG, "-hide_banner", "-y",
@@ -138,11 +119,8 @@ def run(job_id: str) -> None:
         "-map", "0:v:0", "-map", "1:a:0?",
         "-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr_hq", "-cq", "14", "-profile:v", "high",
         "-c:a", "copy",
+        str(out_path),
     ]
-    if skip_upscale:
-        meta = _build_terminal_metadata(job, settings, deinterlace_summary)
-        ffmpeg_cmd += ffmpeg_metadata_args(meta)
-    ffmpeg_cmd.append(str(out_path))
 
     vspipe_cmd = [VSPIPE, str(script_path), "-", "-c", "y4m"]
 
@@ -151,10 +129,7 @@ def run(job_id: str) -> None:
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("deinterlace stage produced no output file")
 
-    if skip_upscale:
-        new_name = naming.set_final_progressive_tag(job["original_filename"], height)
-    else:
-        new_name = naming.set_progressive_tag(job["original_filename"], height)
+    new_name = naming.set_progressive_tag(job["original_filename"], height)
 
     db.log(job_id, STAGE, f"deinterlace complete -> {out_path}")
     db.update_job(job_id, stage=STAGE, status="pending", current_file=str(out_path))

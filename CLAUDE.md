@@ -47,9 +47,10 @@ readonly database" failures under Windows WAL-mode connection churn.
 
 ### Stage pipeline (app/stages/)
 
-`ingest → probe → deinterlace → denoise → upscale → finalize`. Each stage reads/writes the job's
-`settings_json` blob (`db.get_settings`/`db.merge_settings`) to pass detected/computed values forward
-(scan type, crop, PAR, per-stage summaries for the metadata embed, etc.) rather than re-deriving them.
+`ingest → probe → deinterlace → denoise → dehalo → upscale → finalize`. Each stage reads/writes the
+job's `settings_json` blob (`db.get_settings`/`db.merge_settings`) to pass detected/computed values
+forward (scan type, crop, PAR, per-stage summaries for the final metadata embed, etc.) rather than
+re-deriving them.
 
 - **probe**: `ffmpeg -vf idet` sampled at a few points classifies progressive vs. interlaced. When
   idet is ambiguous (the classic telecine signature — still sees combing since it's literally 60
@@ -63,16 +64,31 @@ readonly database" failures under Windows WAL-mode connection churn.
   produce. Plugin DLLs are loaded explicitly by path (`_plugins.vpy.j2`); a few (fft3dfilter, dfttest)
   need `vsfilters\Support` added to the DLL search path via `os.add_dll_directory` because their
   dependency DLLs live in a different folder than the plugin itself — Windows won't find them otherwise.
-  If `job.skip_upscale` is set, this becomes the **terminal** stage (see below).
-- **denoise** / **upscale**: both start with an early-return no-op when `job.skip_upscale` is set —
-  deinterlace already produced and tagged the final file in that mode.
+- **dehalo** (app/stages/dehalo.py): two chained `tvai_up` passes (Iris then Artemis, both at 1:1 —
+  no resolution change) to remove ringing/halo artifacts from oversharpened DVD sources. The model
+  shortnames/params (`app/presets/dehalo.json`) were reverse-engineered by capturing the real
+  `ffmpeg.exe` command line Topaz Video AI itself ran for a given GUI enhancement stack, not read off
+  the GUI's slider labels — "Recover detail" in particular does **not** show up as a literal `details`
+  value in the real command; see the preset's own notes.
+- **denoise** / **dehalo** / **upscale** are each independently toggled (`denoise_enabled`,
+  `dehalo_enabled`, `skip_upscale` — the UI shows the last one inverted as an "Upscale" toggle) and
+  early-return as a no-op passthrough when their own flag says not to run. They do **not** cascade off
+  of each other — e.g. `skip_upscale` (Upscale off) no longer forces denoise/dehalo to also skip; that
+  was the pre-toggle-stack behavior and broke once Dehalo became its own independent toggle sitting
+  between Denoise and Upscale (confirmed by testing: Dehalo silently never ran whenever Upscale was
+  off). `deinterlace_enabled` works the same way for the deinterlace stage.
 - **upscale** (app/stages/upscale.py + app/topaz_models.py): drives Topaz's own bundled `ffmpeg.exe`
   and its `tvai_up` filter directly (confirmed via `ffmpeg -h filter=tvai_up`). Several non-obvious
   things had to be reverse-engineered here — see "Topaz ffmpeg gotchas" below. `topaz_models.py` is
   shared with `server.py` (for the UI's human-readable preset panel) specifically so the *actual*
   scale-chaining logic and the UI's *description* of it can't drift apart.
-- **finalize**: moves the file to the same folder as `original_nas_path` and demangles the name via
-  `naming.py`. The original source file is never touched or deleted (it's archival).
+- **finalize**: the **only** place that decides the final filename tag and embeds the full
+  processing-history metadata (previously split between deinterlace.py's `skip_upscale`-terminal branch
+  and upscale.py — that split assumed one of those two was always "the last stage", which stopped being
+  true once denoise/dehalo/upscale became independently toggleable). Always does one `-c copy` remux to
+  attach `-metadata` tags and standardize on `.mkv` regardless of which stages actually ran, then moves
+  the file to `original_nas_path`'s folder and demangles the name via `naming.py`. The original source
+  file is never touched or deleted (it's archival).
 
 ### Filename tagging (app/naming.py)
 
@@ -81,13 +97,15 @@ Bracket tags (`[DVD]`, `[480i]`, ...) evolve through the pipeline, but **the ter
 final one** (e.g. `Show S01E01 [DVD] [480i].mkv` → `Show S01E01 [Upscaled 1080p].mkv`) — deliberate,
 not a bug; source-type/interim tags aren't meaningful once the deliverable exists.
 
-### skip_upscale mode
+### skip_upscale (the "Upscale" toggle)
 
-A job-level flag (not a separate pipeline) that fans out across three stages: `denoise`/`upscale`
-no-op, and `deinterlace` becomes terminal — handling its own final tagging and the metadata embed that
-`upscale.py` would otherwise be responsible for. `ingest.py` also short-circuits entirely (no copy, no
-processing) if `skip_upscale` is set and the source filename already carries a progressive-resolution
-tag (e.g. `[1080p]`) — nothing to do.
+A job-level flag that makes `upscale.py` no-op — nothing more. It used to also force `denoise`/`dehalo`
+to no-op (an "Upscale off means deinterlace-only" mode), but that broke independent toggling once Dehalo
+shipped as its own stage between Denoise and Upscale, so each of the four toggles now only controls its
+own stage. `ingest.py` still short-circuits entirely (no copy, no processing at all — job jumps straight
+to `finalized`) when `skip_upscale` is set AND `denoise_enabled`/`dehalo_enabled` are both off AND the
+source filename already carries a progressive-resolution tag (e.g. `[1080p]`) — genuinely nothing to do
+in that specific combination; don't widen this check without also checking those two flags.
 
 ### Topaz ffmpeg gotchas (all discovered by hitting them, not from docs)
 

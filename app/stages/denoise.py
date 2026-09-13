@@ -1,7 +1,11 @@
 """Stage 3 (optional): HandBrakeCLI NLMeans denoise, Strong preset, tune
 chosen per batch at submission time (None/Film/Animation). Re-encodes with
 nvenc_h264 since applying a filter requires a re-encode; audio passed through
-untouched."""
+untouched.
+
+Independent of the `skip_upscale` (Upscale toggle) flag -- each toggle in the
+processing stack controls only its own stage now. Final filename tagging and
+metadata embedding both happen unconditionally in finalize.py, not here."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,11 +23,6 @@ def run(job_id: str) -> None:
     job = db.get_job(job_id)
     settings = db.get_settings(job_id)
     src = Path(job["current_file"])
-
-    if job["skip_upscale"]:
-        db.log(job_id, STAGE, "skip_upscale set -- deinterlace-only mode, also skipping denoise")
-        db.update_job(job_id, stage=STAGE, status="pending")
-        return
 
     if not job["denoise_enabled"]:
         db.log(job_id, STAGE, "denoise disabled for this job -- passing through unchanged")

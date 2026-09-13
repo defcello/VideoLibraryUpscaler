@@ -84,6 +84,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover { background: #5866e0; }
 button.small { width: auto; padding: 4px 10px; font-size: 12px; margin-right: 6px; }
 label.checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.toggle-stack { display: flex; flex-direction: column; gap: 8px; }
 
 .queue { overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
