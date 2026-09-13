@@ -147,23 +147,28 @@ async function submitJobs() {
         alert(e.message);
         return;
     }
-    await api("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            paths: Array.from(selected),
-            deinterlace_enabled: document.getElementById("deinterlace-enabled").checked,
-            denoise_enabled: document.getElementById("denoise-enabled").checked,
-            dehalo_enabled: document.getElementById("dehalo-enabled").checked,
-            content_type: document.getElementById("content-type").value,
-            // The API's "skip_upscale" field predates the toggle stack and is
-            // kept internally (server/db) to avoid a schema rename -- the UI
-            // now shows its inverse as an "Upscale" toggle.
-            skip_upscale: !document.getElementById("upscale-enabled").checked,
-            crop_start_seconds: crop.start,
-            crop_end_seconds: crop.end,
-        }),
-    });
+    try {
+        await api("/api/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                paths: Array.from(selected),
+                deinterlace_enabled: document.getElementById("deinterlace-enabled").checked,
+                denoise_enabled: document.getElementById("denoise-enabled").checked,
+                dehalo_enabled: document.getElementById("dehalo-enabled").checked,
+                content_type: document.getElementById("content-type").value,
+                // The API's "skip_upscale" field predates the toggle stack and is
+                // kept internally (server/db) to avoid a schema rename -- the UI
+                // now shows its inverse as an "Upscale" toggle.
+                skip_upscale: !document.getElementById("upscale-enabled").checked,
+                crop_start_seconds: crop.start,
+                crop_end_seconds: crop.end,
+            }),
+        });
+    } catch (e) {
+        alert("Couldn't add to queue: " + e.message);
+        return;
+    }
     selected.clear();
     document.getElementById("selected-count").textContent = "none selected";
     loadBrowse(browsePath);
@@ -200,13 +205,25 @@ function initToggleStack() {
 
 // --------------------------------------------------------------- job table
 
+// job.stage is the LAST COMPLETED stage (see db.py/worker.py's
+// STAGE_RUNNERS: it maps that value to the function that runs NEXT) -- so
+// while status is "running", the stage actually executing is the one AFTER
+// job.stage in STAGES, not job.stage itself. Getting this backwards makes
+// the dashboard look like it's running the wrong toggle entirely (e.g.
+// stage="denoised" while dehalo.py is the one actually mid-run).
+function runningStageIndex(job) {
+    const lastDoneIdx = STAGES.indexOf(job.stage);
+    return Math.min(lastDoneIdx + 1, STAGES.length - 1);
+}
+
 function stageTrack(job) {
-    const curIdx = STAGES.indexOf(job.stage);
+    const lastDoneIdx = STAGES.indexOf(job.stage);
+    const runningIdx = runningStageIndex(job);
     const isDone = job.status === "done";
     return STAGES.map((s, i) => {
         let cls = "stage-dot";
-        if (i < curIdx || isDone) cls += " done";
-        else if (i === curIdx && job.status === "running") cls += " current";
+        if (i <= lastDoneIdx || isDone) cls += " done";
+        else if (i === runningIdx && job.status === "running") cls += " current";
         return `<span class="${cls}" title="${s}"></span>`;
     }).join("");
 }
@@ -337,9 +354,10 @@ async function refreshDetail() {
     html += `<div class="stack-note" style="margin-bottom:12px">${outputName ? escapeHtml(outputName) : "(not yet produced)"}</div>`;
 
     html += `<div class="stage-list">` + STAGES.map((s, i) => {
-        const curIdx = STAGES.indexOf(job.stage);
-        const isDone = job.status === "done" || i < curIdx;
-        const isCurrent = i === curIdx && job.status === "running";
+        const lastDoneIdx = STAGES.indexOf(job.stage);
+        const runningIdx = runningStageIndex(job);
+        const isDone = job.status === "done" || i <= lastDoneIdx;
+        const isCurrent = i === runningIdx && job.status === "running";
         const cls = isDone ? "done" : (isCurrent ? "current" : "pending");
         const dotCls = isDone ? "done" : (isCurrent ? "current" : "");
         const label = isCurrent ? `${s} (running)` : (isDone ? `${s} (done)` : s);

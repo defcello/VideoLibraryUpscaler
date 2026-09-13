@@ -93,17 +93,20 @@ def api_get_job(job_id: str):
 def api_create_jobs(req: CreateJobsRequest):
     content_types = load_preset("content_types")["types"]
     if req.content_type not in content_types:
+        print(f"[api_create_jobs] 400: unknown content_type={req.content_type!r} paths={req.paths}")
         raise HTTPException(400, f"unknown content_type: {req.content_type}")
     resolved = content_types[req.content_type]
 
     if req.crop_start_seconds is not None and req.crop_end_seconds is not None:
         if req.crop_end_seconds <= req.crop_start_seconds:
+            print(f"[api_create_jobs] 400: crop end<=start ({req.crop_start_seconds}, {req.crop_end_seconds}) paths={req.paths}")
             raise HTTPException(400, "crop end must be after crop start")
 
     created = []
     for p in req.paths:
         src = Path(p)
         if not src.exists():
+            print(f"[api_create_jobs] 400: path not found: {p!r} (all paths: {req.paths})")
             raise HTTPException(400, f"path not found: {p}")
         job_id = db.create_job(
             original_nas_path=str(src),
