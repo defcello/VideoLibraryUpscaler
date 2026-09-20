@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, worker
+from . import db, procutil, worker
 from .config import CONFIG, STATIC_DIR, list_presets, load_preset
 from .topaz_models import available_scales, describe_upscale_strategy
 
@@ -40,6 +40,13 @@ def _startup() -> None:
     recovered = db.recover_running_jobs()
     if recovered:
         print(f"[server] recovered {recovered} job(s) stuck in 'running' after a restart")
+    restarted = db.recover_needs_restart_jobs()
+    if restarted:
+        print(f"[server] re-queued {restarted} job(s) parked as 'needs_restart' after a restart")
+    # Deliberately NOT recovering 'paused' jobs here -- pausing is a manual
+    # user action to free the GPU, and auto-resuming that work just because
+    # the server process restarted would defeat the point. Only the explicit
+    # POST /api/worker/resume does that.
     worker.start()
 
 
@@ -209,10 +216,25 @@ def api_retry_job(job_id: str):
     row = db.get_job(job_id)
     if row is None:
         raise HTTPException(404, "job not found")
-    if row["status"] not in ("failed", "needs_review"):
-        raise HTTPException(400, "only failed/needs_review jobs can be retried")
+    if row["status"] not in ("failed", "needs_review", "needs_restart"):
+        raise HTTPException(400, "only failed/needs_review/needs_restart jobs can be retried")
     db.update_job(job_id, status="pending", error_message=None)
     return {"ok": True}
+
+
+# --------------------------------------------------------------- worker control
+
+@app.post("/api/worker/pause")
+def api_worker_pause():
+    procutil.request_pause()
+    return {"ok": True, "state": procutil.pause_state()}
+
+
+@app.post("/api/worker/resume")
+def api_worker_resume():
+    procutil.request_resume()
+    resumed = db.recover_paused_jobs()
+    return {"ok": True, "state": procutil.pause_state(), "resumed_jobs": resumed}
 
 
 # ----------------------------------------------------------------- browsing
@@ -305,7 +327,11 @@ async def api_stream():
         last_payload = None
         while True:
             jobs = [_row_to_dict(r) for r in db.list_jobs()]
-            payload = json.dumps({"jobs": jobs, "current_job_id": worker.current_job_id()})
+            payload = json.dumps({
+                "jobs": jobs,
+                "current_job_id": worker.current_job_id(),
+                "worker_pause_state": procutil.pause_state(),
+            })
             if payload != last_payload:
                 yield f"data: {payload}\n\n"
                 last_payload = payload

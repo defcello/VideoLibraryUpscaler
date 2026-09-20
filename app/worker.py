@@ -106,6 +106,15 @@ def _process_one(job_row) -> None:
 def _loop(poll_seconds: float) -> None:
     print("[worker] loop started")
     while not _stop_event.is_set():
+        # Between stage dispatches is always a safe point to freeze at (a
+        # generative upscale's own internal segment loop is what handles
+        # pausing mid-run -- this thread is fully sequential, so _loop only
+        # ever observes the gap between one stage finishing and the next
+        # being picked up, never mid-stage).
+        if procutil.pause_state() != "running":
+            procutil.should_pause_now()
+            _stop_event.wait(poll_seconds)
+            continue
         job_row = db.next_queued_job()
         if job_row is None:
             _stop_event.wait(poll_seconds)

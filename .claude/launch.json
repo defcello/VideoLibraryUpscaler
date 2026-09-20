@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-remaster-pipeline",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "app.server"],
+      "port": 8756
+    }
+  ]
+}

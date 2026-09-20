@@ -51,6 +51,15 @@
         "confidence_threshold": 0.85
     },
 
+    "_comment_checkpoint": "Generative (Starlight) upscales can take days -- upscale.py's _run_generative splits the source into segments at black-frame boundaries (found once via ffmpeg's blackdetect filter) so a crash/pause/VRAM-fragmentation stop only loses at most one segment's worth of work, not the whole job. Segment outputs are copied here (NOT the R:\\ staging RAM disk, which is wiped on reboot) so they survive a restart.",
+    "checkpoint_root": "Z:\\Downloads\\ai-remaster-pipeline-checkpoints",
+    "checkpoint_min_spacing_seconds": 5,
+    "blackdetect": {
+        "d": 0.06,
+        "pic_th": 0.98,
+        "pix_th": 0.10
+    },
+
     "default_topaz_preset": "topaz_film",
     "default_denoise_tune": "none"
 }

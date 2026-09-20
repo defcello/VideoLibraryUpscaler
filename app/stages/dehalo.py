@@ -39,8 +39,9 @@ def _current_dims(path: Path) -> tuple[int, int]:
          "-show_entries", "stream=width,height", "-of", "json", str(path)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
-    data = json.loads(proc.stdout)
-    s = data["streams"][0]
+    if proc.returncode != 0 or not path.exists():
+        raise RuntimeError(f"ffprobe failed to read dimensions from {path}: {proc.stderr[-2000:]}")
+    s = json.loads(proc.stdout)["streams"][0]
     return int(s["width"]), int(s["height"])
 
 

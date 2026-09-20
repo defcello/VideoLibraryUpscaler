@@ -252,7 +252,21 @@ function stageTrack(job) {
 function statusLabel(job) {
     if (job.status === "failed" && job.failure_category === "oom") return "FAILED (OOM)";
     if (job.status === "failed" && job.failure_category === "disk_full") return "FAILED (Disk Full)";
+    if (job.status === "needs_restart") return "NEEDS RESTART (VRAM)";
     return job.status.replace(/_/g, " ");
+}
+
+// A checkpointed generative job's settings carry checkpoint_completed_segments
+// while it's mid-flight (cleared again once the job finishes successfully) --
+// used to show ratcheted progress instead of a job looking reset after a
+// crash/pause/resume cycle.
+function checkpointSummary(job) {
+    const segs = job.settings && job.settings.checkpoint_completed_segments;
+    if (!segs || !segs.length) return null;
+    const resumeFrom = segs[segs.length - 1].end;
+    const mins = Math.floor(resumeFrom / 60);
+    const secs = Math.floor(resumeFrom % 60);
+    return `${segs.length} checkpoint segment(s) complete, resuming from ${mins}:${String(secs).padStart(2, "0")}`;
 }
 
 function settingsSummary(job) {
@@ -375,7 +389,14 @@ async function refreshDetail() {
     html += `<div class="stack-row"><span class="stack-label">Output file name</span></div>`;
     html += `<div class="stack-note" style="margin-bottom:12px">${outputName ? escapeHtml(outputName) : "(not yet produced)"}</div>`;
 
-    html += `<div class="stage-list">` + STAGES.map((s, i) => {
+    // Only the stages actually selected for this job are shown -- a job's
+    // toggled-off stages (deinterlace/denoise/dehalo/upscale) are permanently
+    // no-op passthroughs, so listing them just as "(skipped)" clutters the
+    // one place meant to give an at-a-glance read of how much work (and
+    // roughly how long) a job actually involves.
+    html += `<div class="stage-list">` + STAGES.map((s, i) => ({ s, i }))
+        .filter(({ i }) => !isStageSkipped(job, i))
+        .map(({ s, i }) => {
         const lastDoneIdx = STAGES.indexOf(job.stage);
         const runningIdx = runningStageIndex(job);
         const isDone = job.status === "done" || i <= lastDoneIdx;
@@ -386,8 +407,6 @@ async function refreshDetail() {
         if (isCurrent) {
             const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
             label = `${s} (running ${pct.toFixed(0)}%)`;
-        } else if (isDone && isStageSkipped(job, i)) {
-            label = `${s} (skipped)`;
         } else if (isDone) {
             label = `${s} (done 100%)`;
         } else {
@@ -396,7 +415,12 @@ async function refreshDetail() {
         return `<div class="stage-list-row ${cls}"><span class="stage-dot ${dotCls}"></span>${escapeHtml(label)}</div>`;
     }).join("") + `</div>`;
 
-    if (job.status === "failed" && job.error_message) {
+    const checkpointNote = checkpointSummary(job);
+    if (checkpointNote) {
+        html += `<div class="stack-note" style="margin-top:8px">${escapeHtml(checkpointNote)}</div>`;
+    }
+
+    if ((job.status === "failed" || job.status === "needs_restart") && job.error_message) {
         html += `<div class="error-box">${escapeHtml(job.error_message)}</div>`;
         html += `<button class="small" onclick="retryJob('${job.id}')">Retry stage</button>`;
     }
@@ -458,6 +482,41 @@ function escapeHtml(s) {
 
 // -------------------------------------------------------------------- live
 
+function renderPauseControls(pauseState) {
+    const pauseBtn = document.getElementById("pause-btn");
+    const resumeBtn = document.getElementById("resume-btn");
+    if (pauseState === "paused") {
+        pauseBtn.textContent = "Paused";
+        pauseBtn.disabled = true;
+    } else if (pauseState === "pausing") {
+        pauseBtn.textContent = "Pausing at next checkpoint...";
+        pauseBtn.disabled = true;
+    } else {
+        pauseBtn.textContent = "Pause at next checkpoint";
+        pauseBtn.disabled = false;
+    }
+    resumeBtn.disabled = pauseState === "running";
+}
+
+async function pauseWorker() {
+    renderPauseControls("pausing");  // immediate feedback, SSE will confirm shortly
+    try {
+        await api("/api/worker/pause", { method: "POST" });
+    } catch (e) {
+        alert("Couldn't request pause: " + e.message);
+    }
+}
+
+async function resumeWorker() {
+    try {
+        await api("/api/worker/resume", { method: "POST" });
+    } catch (e) {
+        alert("Couldn't resume: " + e.message);
+        return;
+    }
+    renderPauseControls("running");
+}
+
 function connectStream() {
     const es = new EventSource("/api/stream");
     es.onmessage = (ev) => {
@@ -465,6 +524,7 @@ function connectStream() {
         renderJobs(data.jobs);
         document.getElementById("worker-status").textContent =
             data.current_job_id ? `worker: running ${data.current_job_id}` : "worker: idle";
+        renderPauseControls(data.worker_pause_state || "running");
     };
     es.onerror = () => {
         es.close();
@@ -475,6 +535,8 @@ function connectStream() {
 // -------------------------------------------------------------------- init
 
 document.getElementById("submit-btn").onclick = submitJobs;
+document.getElementById("pause-btn").onclick = pauseWorker;
+document.getElementById("resume-btn").onclick = resumeWorker;
 document.getElementById("detail-close").onclick = closeDetail;
 document.getElementById("preset-toggle").onclick = togglePresetDetails;
 document.getElementById("content-type").onchange = () => {

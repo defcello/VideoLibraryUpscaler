@@ -45,6 +45,12 @@ def run(job_id: str) -> None:
         "--nlmeans-tune", tune["handbrake_tune"],
         "-e", "nvenc_h264", "-q", "18",
         "--all-audio", "-E", "copy",
+        # HandBrakeCLI defaults to --crop-mode auto, which autodetects and
+        # strips what it thinks are black bars -- crop was already correctly
+        # resolved (usually to 0,0,0,0) upstream during probe/deinterlace, so
+        # letting HandBrake re-guess here was silently shrinking/cropping the
+        # frame on its own (confirmed: a real 640x480 job came out 496x432).
+        "--crop-mode", "none",
     ]
     db.log(job_id, STAGE, f"denoise tune={tune_key} ({tune['label']})")
     run_logged(job_id, STAGE, cmd, progress=handbrake_percent_progress())

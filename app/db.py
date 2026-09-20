@@ -253,6 +253,32 @@ def recover_running_jobs() -> int:
         return cur.rowcount
 
 
+def recover_needs_restart_jobs() -> int:
+    """On startup, jobs parked as 'needs_restart' (the generative engine's
+    VRAM pre-check failed, likely fragmentation that only a restart clears)
+    are safe to retry automatically now that a restart has actually
+    happened -- unlike 'paused' (see recover_paused_jobs), which is a
+    deliberate user action and must never auto-resume just because the
+    server restarted."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'pending', updated_at = ? WHERE status = 'needs_restart'", (time.time(),)
+        )
+        return cur.rowcount
+
+
+def recover_paused_jobs() -> int:
+    """Flips any 'paused' job(s) back to 'pending' -- called only from the
+    explicit POST /api/worker/resume action, never from server startup, since
+    a user who paused to free the GPU shouldn't have that work silently
+    resume just because the server process restarted."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'pending', updated_at = ? WHERE status = 'paused'", (time.time(),)
+        )
+        return cur.rowcount
+
+
 def next_stage(current: str) -> str:
     idx = STAGES.index(current)
     return STAGES[min(idx + 1, len(STAGES) - 1)]

@@ -91,6 +91,51 @@ def kill_active() -> int:
     return killed
 
 
+# Manual "pause the whole worker" control, so the user can reclaim the GPU
+# (gaming, editing) without losing in-progress generative-upscale work. Lives
+# here (not worker.py) so stages/upscale.py can check it mid-job without a
+# circular import -- same reason kill_active() lives here.
+_pause_requested = False
+_paused = False
+_pause_lock = threading.Lock()
+
+
+def request_pause() -> None:
+    global _pause_requested
+    with _pause_lock:
+        _pause_requested = True
+
+
+def request_resume() -> None:
+    global _pause_requested, _paused
+    with _pause_lock:
+        _pause_requested = False
+        _paused = False
+
+
+def pause_state() -> str:
+    """"running" | "pausing" (requested, not yet at a safe stopping point) |
+    "paused" (actually stopped)."""
+    with _pause_lock:
+        if _paused:
+            return "paused"
+        if _pause_requested:
+            return "pausing"
+        return "running"
+
+
+def should_pause_now() -> bool:
+    """Checked at a safe boundary (between stages, between upscale
+    checkpoint segments). If a pause was requested, latches _paused=True and
+    returns True so the caller can stop cleanly and resumably."""
+    global _paused
+    with _pause_lock:
+        if _pause_requested:
+            _paused = True
+            return True
+        return False
+
+
 def run_logged(
     job_id: str,
     stage: str,

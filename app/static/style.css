@@ -100,6 +100,8 @@ tr.job-row.selected { background: var(--panel-2); }
 .badge.done { background: #17362a; color: var(--green); }
 .badge.failed { background: #3d2020; color: var(--red); }
 .badge.needs_review { background: #3d3420; color: var(--yellow); }
+.badge.needs_restart { background: #3d3420; color: var(--yellow); }
+.badge.paused { background: #2c303c; color: var(--text-dim); }
 .badge.cancelled { background: #2c303c; color: var(--text-dim); }
 
 .stage-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
