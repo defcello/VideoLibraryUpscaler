@@ -69,6 +69,11 @@ class ReviewDecisionRequest(BaseModel):
     proceed: bool = True
 
 
+class ReorderRequest(BaseModel):
+    row: Optional[int] = None            # 1-based target row in the full dashboard table
+    direction: Optional[str] = None      # "top" | "up" | "down" | "bottom"
+
+
 def _row_to_dict(row) -> dict:
     d = dict(row)
     if "settings_json" in d and d["settings_json"]:
@@ -83,7 +88,7 @@ def _row_to_dict(row) -> dict:
 
 @app.get("/api/jobs")
 def api_list_jobs():
-    return [_row_to_dict(r) for r in db.list_jobs()]
+    return [_row_to_dict(r) for r in db.list_jobs_ordered()]
 
 
 @app.get("/api/jobs/{job_id}")
@@ -222,6 +227,26 @@ def api_retry_job(job_id: str):
     return {"ok": True}
 
 
+@app.post("/api/jobs/{job_id}/reorder")
+def api_reorder_job(job_id: str, req: ReorderRequest):
+    row = db.get_job(job_id)
+    if row is None:
+        raise HTTPException(404, "job not found")
+    if row["status"] == "done":
+        raise HTTPException(400, "completed jobs are always sorted by completion time and can't be reordered")
+    if req.direction is not None:
+        if req.direction not in ("top", "up", "down", "bottom"):
+            raise HTTPException(400, f"invalid direction: {req.direction}")
+        db.reorder_job(job_id, direction=req.direction)
+    elif req.row is not None:
+        if req.row < 1:
+            raise HTTPException(400, "row must be >= 1")
+        db.reorder_job(job_id, row=req.row)
+    else:
+        raise HTTPException(400, "must provide either 'row' or 'direction'")
+    return {"ok": True}
+
+
 # --------------------------------------------------------------- worker control
 
 @app.post("/api/worker/pause")
@@ -326,7 +351,7 @@ async def api_stream():
     async def event_gen():
         last_payload = None
         while True:
-            jobs = [_row_to_dict(r) for r in db.list_jobs()]
+            jobs = [_row_to_dict(r) for r in db.list_jobs_ordered()]
             payload = json.dumps({
                 "jobs": jobs,
                 "current_job_id": worker.current_job_id(),

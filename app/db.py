@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     crop_end_seconds        REAL,
     failure_category        TEXT,                            -- 'oom' | 'disk_full' | NULL, set on status='failed'
     progress_percent        REAL,                             -- 0-100 within the currently-running stage, NULL if unknown
+    queue_order              INTEGER,                          -- manual position among not-yet-'done' jobs (see reorder_job); irrelevant once status='done'
+    completed_at             REAL,                             -- set once, alongside status='done' (see finalize.py); NULL until then
     created_at             REAL NOT NULL,
     updated_at              REAL NOT NULL
 );
@@ -129,6 +131,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN dehalo_enabled INTEGER NOT NULL DEFAULT 0")
     if "progress_percent" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN progress_percent REAL")
+    if "queue_order" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN queue_order INTEGER")
+        # Backfill so existing rows keep their current (created_at) order the
+        # first time this runs, rather than all landing on the same NULL and
+        # sorting arbitrarily.
+        for i, row in enumerate(conn.execute("SELECT id FROM jobs ORDER BY created_at ASC")):
+            conn.execute("UPDATE jobs SET queue_order = ? WHERE id = ?", (i, row["id"]))
+    if "completed_at" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN completed_at REAL")
+        # Best-effort backfill for jobs already 'done' before this column
+        # existed -- updated_at is untouched after finalize.py's terminal
+        # update, so it's a reasonable stand-in for the real completion time.
+        conn.execute("UPDATE jobs SET completed_at = updated_at WHERE status = 'done' AND completed_at IS NULL")
 
 
 def create_job(
@@ -147,20 +162,26 @@ def create_job(
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
     with get_conn() as conn:
+        # New jobs land at the bottom of the not-yet-done queue, same as the
+        # old created_at-ascending default -- done jobs are excluded since
+        # their queue_order is meaningless once they're sorted by completed_at.
+        next_order = conn.execute(
+            "SELECT COALESCE(MAX(queue_order), -1) + 1 FROM jobs WHERE status != 'done'"
+        ).fetchone()[0]
         conn.execute(
             """INSERT INTO jobs (
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
                 deinterlace_enabled, denoise_enabled, denoise_tune, dehalo_enabled,
                 topaz_preset, skip_upscale,
-                crop_start_seconds, crop_end_seconds,
+                crop_start_seconds, crop_end_seconds, queue_order,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job_id, original_nas_path, original_filename, working_name,
                 int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(dehalo_enabled),
                 topaz_preset, int(skip_upscale),
-                crop_start_seconds, crop_end_seconds,
+                crop_start_seconds, crop_end_seconds, next_order,
                 now, now,
             ),
         )
@@ -181,14 +202,74 @@ def list_jobs(status: Optional[str] = None) -> list[sqlite3.Row]:
         return conn.execute("SELECT * FROM jobs ORDER BY created_at ASC").fetchall()
 
 
+# Jobs are never done being re-sorted after just one comparison key, so this
+# ORDER BY is shared verbatim between the dashboard listing and the worker's
+# own pick-next-job query -- see list_jobs_ordered() and next_queued_job().
+_QUEUE_ORDER_SQL = """
+    CASE WHEN status = 'done' THEN 0 ELSE 1 END,
+    CASE WHEN status = 'done' THEN completed_at ELSE queue_order END ASC,
+    created_at ASC
+"""
+
+
+def list_jobs_ordered() -> list[sqlite3.Row]:
+    """Dashboard listing order: every 'done' job first, oldest completion to
+    newest, then every other job (queued/running/failed/needs_review/...) in
+    manual queue order -- see reorder_job(). This is also the order the
+    worker actually processes pending jobs in (next_queued_job)."""
+    with get_conn() as conn:
+        return conn.execute(f"SELECT * FROM jobs ORDER BY {_QUEUE_ORDER_SQL}").fetchall()
+
+
 def next_queued_job() -> Optional[sqlite3.Row]:
-    """The oldest job that is not yet finalized/failed/needing review and not currently running."""
+    """The not-currently-running job next up in queue order (see reorder_job)
+    among those that are actually ready to process."""
     with get_conn() as conn:
         return conn.execute(
-            """SELECT * FROM jobs
-               WHERE status IN ('pending')
-               ORDER BY created_at ASC LIMIT 1"""
+            "SELECT * FROM jobs WHERE status = 'pending' ORDER BY queue_order ASC, created_at ASC LIMIT 1"
         ).fetchone()
+
+
+def reorder_job(job_id: str, direction: Optional[str] = None, row: Optional[int] = None) -> None:
+    """Repositions job_id among the other not-yet-'done' jobs. Completed jobs
+    are never part of this ordering -- they're always pinned to the top by
+    completed_at instead (see list_jobs_ordered) -- so both `row` (a 1-based
+    position in the full dashboard table, completed jobs included) and the
+    `direction` shortcuts ("top"/"up"/"down"/"bottom") operate purely on the
+    not-done sublist, with `row` clamped into the range below however many
+    completed jobs currently sit above it. Exactly one of `direction`/`row`
+    should be given; renumbers the whole not-done sublist as consecutive
+    integers via a raw UPDATE (not update_job()) so this doesn't bump
+    updated_at on every other queued job just because one of them moved.
+    """
+    with get_conn() as conn:
+        full = conn.execute(f"SELECT id, status FROM jobs ORDER BY {_QUEUE_ORDER_SQL}").fetchall()
+        completed_count = sum(1 for r in full if r["status"] == "done")
+        incomplete_ids = [r["id"] for r in full if r["status"] != "done"]
+        if job_id not in incomplete_ids:
+            return  # not found, or a completed job -- nothing to reorder
+        i = incomplete_ids.index(job_id)
+        n = len(incomplete_ids)
+        if direction == "top":
+            new_idx = 0
+        elif direction == "up":
+            new_idx = max(0, i - 1)
+        elif direction == "down":
+            new_idx = min(n - 1, i + 1)
+        elif direction == "bottom":
+            new_idx = n - 1
+        elif row is not None:
+            new_idx = min(max(row - completed_count - 1, 0), n - 1)
+        else:
+            return
+        if new_idx == i:
+            return
+        incomplete_ids.pop(i)
+        incomplete_ids.insert(new_idx, job_id)
+        conn.executemany(
+            "UPDATE jobs SET queue_order = ? WHERE id = ?",
+            [(pos, jid) for pos, jid in enumerate(incomplete_ids)],
+        )
 
 
 def update_job(job_id: str, **fields: Any) -> None:

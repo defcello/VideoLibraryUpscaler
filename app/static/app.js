@@ -6,8 +6,15 @@ let browsePath = null;
 let selected = new Set();
 let presets = null;
 let jobsById = {};
+let lastRenderedJobs = [];
 let openDetailId = null;
 let logsTimer = null;
+
+// Row-number editing (click the "#" label on an incomplete job's row) --
+// module-level so it survives the full-tbody rebuild that both the SSE
+// stream and manual refreshes do every render.
+let editingRowId = null;
+let editingDraftValue = "";
 
 async function api(path, opts) {
     const res = await fetch(path, opts);
@@ -278,19 +285,54 @@ function settingsSummary(job) {
     return bits.join(" · ");
 }
 
+// Row-number cell: completed jobs (always pinned to the top, oldest
+// completion first -- see db.list_jobs_ordered) just show a plain number.
+// Every other job's "#" label can be clicked into a number input, plus
+// to-top/up/down/to-bottom move buttons -- both drive POST
+// /api/jobs/{id}/reorder (see moveJob/commitRowNum below).
+function rowNumberCellHtml(job, i, jobs, completedCount) {
+    const rank = i + 1;
+    if (job.status === "done") {
+        return `<td class="row-num"><div class="row-num-main"><span class="row-num-label">${rank}</span></div></td>`;
+    }
+    const hasIncompleteAbove = i > completedCount;
+    const hasBelow = i < jobs.length - 1;
+    const isEditing = job.id === editingRowId;
+
+    const numHtml = isEditing
+        ? `<input type="number" class="row-num-input" min="1" max="${jobs.length}" step="1" value="${escapeHtml(editingDraftValue)}">
+           <button class="row-num-save" title="Save">&#9989;</button>
+           <button class="row-num-cancel" title="Cancel">&#10060;</button>`
+        : `<span class="row-num-label" data-editable="true" title="Click to move to a specific row">${rank}</span>`;
+
+    return `<td class="row-num">
+        <div class="row-num-main">${numHtml}</div>
+        <div class="row-num-moves">
+            <button class="row-move" data-dir="top" title="Move to top" ${hasIncompleteAbove ? "" : "disabled"}>&#9195;</button>
+            <button class="row-move" data-dir="up" title="Move up" ${hasIncompleteAbove ? "" : "disabled"}>&#128316;</button>
+            <button class="row-move" data-dir="down" title="Move down" ${hasBelow ? "" : "disabled"}>&#128317;</button>
+            <button class="row-move" data-dir="bottom" title="Move to bottom" ${hasBelow ? "" : "disabled"}>&#9196;</button>
+        </div>
+    </td>`;
+}
+
 function renderJobs(jobs) {
     jobsById = Object.fromEntries(jobs.map(j => [j.id, j]));
+    lastRenderedJobs = jobs;
     const tbody = document.getElementById("job-rows");
     tbody.innerHTML = "";
     document.getElementById("empty-msg").style.display = jobs.length ? "none" : "block";
 
-    for (const job of [...jobs].reverse()) {
+    const completedCount = jobs.filter(j => j.status === "done").length;
+
+    jobs.forEach((job, i) => {
         const tr = document.createElement("tr");
         tr.className = "job-row" + (job.id === openDetailId ? " selected" : "");
         tr.onclick = () => openDetail(job.id);
         const displayName = (job.settings && job.settings.display_filename) || job.original_filename;
         const isRunning = job.status === "running";
         tr.innerHTML = `
+            ${rowNumberCellHtml(job, i, jobs, completedCount)}
             <td class="filename" title="${displayName}">${displayName}</td>
             <td><span class="badge ${job.status}">${statusLabel(job)}</span></td>
             <td><div class="stage-track">${stageTrack(job)}</div></td>
@@ -304,7 +346,99 @@ function renderJobs(jobs) {
             e.stopPropagation();
             deleteJob(job.id);
         };
+
+        const rowNumLabel = tr.querySelector(".row-num-label[data-editable]");
+        if (rowNumLabel) {
+            rowNumLabel.onclick = (e) => {
+                e.stopPropagation();
+                startEditRowNum(job.id, i + 1);
+            };
+        }
+        const saveBtn = tr.querySelector(".row-num-save");
+        if (saveBtn) saveBtn.onclick = (e) => { e.stopPropagation(); commitRowNum(job.id); };
+        const cancelBtn = tr.querySelector(".row-num-cancel");
+        if (cancelBtn) cancelBtn.onclick = (e) => { e.stopPropagation(); cancelEditRowNum(); };
+        const input = tr.querySelector(".row-num-input");
+        if (input) {
+            input.onclick = (e) => e.stopPropagation();
+            input.oninput = () => { editingDraftValue = input.value; };
+            input.onkeydown = (e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") commitRowNum(job.id);
+                if (e.key === "Escape") cancelEditRowNum();
+            };
+        }
+        tr.querySelectorAll(".row-move").forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                if (btn.disabled) return;
+                moveJob(job.id, btn.dataset.dir);
+            };
+        });
+
         tbody.appendChild(tr);
+    });
+
+    if (editingRowId) focusRowNumInput();
+}
+
+function startEditRowNum(jobId, currentRank) {
+    editingRowId = jobId;
+    editingDraftValue = String(currentRank);
+    renderJobs(lastRenderedJobs);
+}
+
+function cancelEditRowNum() {
+    editingRowId = null;
+    editingDraftValue = "";
+    renderJobs(lastRenderedJobs);
+}
+
+async function commitRowNum(jobId) {
+    const n = parseInt(editingDraftValue, 10);
+    if (!Number.isFinite(n) || n < 1) {
+        alert("Enter a valid row number.");
+        return;
+    }
+    editingRowId = null;
+    editingDraftValue = "";
+    try {
+        await api(`/api/jobs/${jobId}/reorder`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ row: n }),
+        });
+    } catch (e) {
+        alert("Couldn't reorder: " + e.message);
+    }
+    refreshJobsNow();
+}
+
+async function moveJob(jobId, direction) {
+    try {
+        await api(`/api/jobs/${jobId}/reorder`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ direction }),
+        });
+    } catch (e) {
+        alert("Couldn't reorder: " + e.message);
+        return;
+    }
+    refreshJobsNow();
+}
+
+async function refreshJobsNow() {
+    try {
+        renderJobs(await api("/api/jobs"));
+    } catch (e) { /* the live stream will catch up shortly regardless */ }
+}
+
+function focusRowNumInput() {
+    const input = document.querySelector(".row-num-input");
+    if (input) {
+        input.focus();
+        input.select();
     }
 }
 

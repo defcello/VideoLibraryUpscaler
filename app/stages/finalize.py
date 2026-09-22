@@ -21,6 +21,7 @@ left the file in.
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 from .. import db
@@ -112,4 +113,4 @@ def run(job_id: str) -> None:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     db.log(job_id, STAGE, f"finalized: {dest_path}")
-    db.update_job(job_id, stage=STAGE, status="done", current_file=str(dest_path))
+    db.update_job(job_id, stage=STAGE, status="done", current_file=str(dest_path), completed_at=time.time())

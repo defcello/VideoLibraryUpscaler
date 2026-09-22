@@ -163,3 +163,24 @@ tr.job-row.selected { background: var(--panel-2); }
 .delete-btn { width: auto; padding: 5px 9px; font-size: 15px; line-height: 1; background: transparent; border: 1px solid var(--border); color: var(--text-dim); display: inline-flex; align-items: center; justify-content: center; }
 .delete-btn:hover:not(:disabled) { background: #3d2020; border-color: var(--red); color: var(--red); }
 .delete-btn:disabled { opacity: .3; cursor: not-allowed; }
+
+.row-num { white-space: nowrap; }
+.row-num-main { display: flex; align-items: center; gap: 4px; min-height: 24px; }
+.row-num-label { font-family: var(--mono); font-weight: 600; color: var(--text-dim); }
+.row-num-label[data-editable="true"] { color: var(--text); cursor: pointer; border-bottom: 1px dashed var(--text-dim); }
+.row-num-label[data-editable="true"]:hover { color: var(--accent); border-color: var(--accent); }
+.row-num-input { width: 52px; padding: 3px 5px; font-size: 12px; font-family: var(--mono); }
+.row-num-save, .row-num-cancel {
+    width: auto; padding: 2px 5px; font-size: 12px; line-height: 1; background: transparent;
+    border: 1px solid var(--border); color: var(--text-dim); border-radius: 4px;
+}
+.row-num-save:hover { background: #17362a; border-color: var(--green); color: var(--green); }
+.row-num-cancel:hover { background: #3d2020; border-color: var(--red); color: var(--red); }
+.row-num-moves { display: flex; gap: 2px; margin-top: 4px; }
+.row-move {
+    width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; background: transparent;
+    border: 1px solid var(--border); color: var(--text-dim); border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.row-move:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
+.row-move:disabled { opacity: .25; cursor: not-allowed; }
