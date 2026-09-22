@@ -461,6 +461,17 @@ async function deleteJob(jobId) {
     if (openDetailId === jobId) closeDetail();
 }
 
+async function deleteDoneJobs() {
+    if (!confirm("Remove every finished job from the queue list?\n\n(This only clears dashboard entries -- output files already on disk are untouched.)")) return;
+    try {
+        const res = await api("/api/jobs/done", { method: "DELETE" });
+        if (openDetailId && jobsById[openDetailId] && jobsById[openDetailId].status === "done") closeDetail();
+        if (!res.deleted) alert("No done jobs to remove.");
+    } catch (e) {
+        alert("Couldn't delete done jobs: " + e.message);
+    }
+}
+
 async function rerunJob(jobId) {
     try {
         await api(`/api/jobs/${jobId}/rerun`, { method: "POST" });
@@ -671,6 +682,7 @@ function connectStream() {
 document.getElementById("submit-btn").onclick = submitJobs;
 document.getElementById("pause-btn").onclick = pauseWorker;
 document.getElementById("resume-btn").onclick = resumeWorker;
+document.getElementById("delete-done-btn").onclick = deleteDoneJobs;
 document.getElementById("detail-close").onclick = closeDetail;
 document.getElementById("preset-toggle").onclick = togglePresetDetails;
 document.getElementById("content-type").onchange = () => {

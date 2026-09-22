@@ -158,6 +158,14 @@ def api_review_job(job_id: str, decision: ReviewDecisionRequest):
     return {"ok": True}
 
 
+@app.delete("/api/jobs/done")
+def api_delete_done_jobs():
+    # Must be registered before the /api/jobs/{job_id} route below --
+    # FastAPI matches routes in registration order, and {job_id} would
+    # otherwise swallow "done" as a literal job id.
+    return {"deleted": db.delete_done_jobs()}
+
+
 @app.delete("/api/jobs/{job_id}")
 def api_delete_job(job_id: str):
     row = db.get_job(job_id)

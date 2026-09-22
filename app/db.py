@@ -324,6 +324,18 @@ def delete_job(job_id: str) -> None:
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 
 
+def delete_done_jobs() -> int:
+    """Bulk version of delete_job() for every job currently 'done'. Safe to
+    call unconditionally -- finalize.py already cleans up a job's staging_dir
+    the moment it reaches 'done', so there's no on-disk cleanup needed here,
+    unlike the single-job delete path which may still be deleting a running
+    job's staging dir."""
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM job_logs WHERE job_id IN (SELECT id FROM jobs WHERE status = 'done')")
+        cur = conn.execute("DELETE FROM jobs WHERE status = 'done'")
+        return cur.rowcount
+
+
 def recover_running_jobs() -> int:
     """On startup, any job stuck in 'running' means the process died mid-stage.
     Its `stage` field only advances after a stage's output is confirmed
