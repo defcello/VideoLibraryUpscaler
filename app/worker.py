@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 
-from . import db, procutil
+from . import db, procutil, staging
 from .stages import deinterlace, dehalo, denoise, finalize, ingest, probe, upscale
 
 STAGE_RUNNERS = {
@@ -52,6 +52,8 @@ def request_cancel(job_id: str) -> bool:
         return True
     if row["status"] == "pending":
         db.update_job(job_id, status="cancelled", error_message="Cancelled before it started running")
+        if _current_job_id != job_id:
+            staging.cleanup(job_id)
         return True
     return row["status"] not in db.TERMINAL_STATES  # already done/failed/etc -- nothing to abort
 
@@ -100,7 +102,10 @@ def _process_one(job_row) -> None:
             db.log(job_id, stage, f"FAILED: {e}\n{tb}")
             db.update_job(job_id, status="failed", error_message=str(e), failure_category=category)
     finally:
-        _current_job_id = None
+        try:
+            staging.cleanup(job_id)
+        finally:
+            _current_job_id = None
 
 
 def _loop(poll_seconds: float) -> None:
@@ -138,6 +143,7 @@ def start(poll_seconds: float = 3.0) -> None:
     if _thread and _thread.is_alive():
         return
     _stop_event.clear()
+    staging.cleanup_finished_jobs()
     _thread = threading.Thread(target=_loop, args=(poll_seconds,), daemon=True, name="pipeline-worker")
     _thread.start()
 

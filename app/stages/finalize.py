@@ -24,7 +24,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .. import db
+from .. import db, staging
 from ..config import CONFIG
 from ..decoder_util import cuvid_decoder_args
 from ..metadata_tags import ffmpeg_metadata_args, processed_date
@@ -104,13 +104,6 @@ def run(job_id: str) -> None:
     db.log(job_id, STAGE, f"moving {remuxed} -> {dest_path}")
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(str(remuxed), str(dest_path))
-    if current != remuxed:
-        current.unlink(missing_ok=True)
-
-    staging_dir = job["staging_dir"]
-    if staging_dir and Path(staging_dir).exists():
-        db.log(job_id, STAGE, f"cleaning up staging dir {staging_dir}")
-        shutil.rmtree(staging_dir, ignore_errors=True)
-
     db.log(job_id, STAGE, f"finalized: {dest_path}")
     db.update_job(job_id, stage=STAGE, status="done", current_file=str(dest_path), completed_at=time.time())
+    staging.cleanup(job_id)

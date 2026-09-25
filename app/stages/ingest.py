@@ -86,6 +86,8 @@ def run(job_id: str) -> None:
 
     staging_dir = Path(drive) / CONFIG["staging_subdir"] / job_id
     staging_dir.mkdir(parents=True, exist_ok=True)
+    # Record ownership before copying, so a disk-full copy can be cleaned up.
+    db.update_job(job_id, staging_drive=drive, staging_dir=str(staging_dir))
 
     working_name = naming.sanitize_working_name(job_id, src.suffix)
     dest = staging_dir / working_name

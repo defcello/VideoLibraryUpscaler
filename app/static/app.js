@@ -497,6 +497,7 @@ async function abortJob(jobId) {
 
 async function openDetail(jobId) {
     openDetailId = jobId;
+    document.getElementById("detail-resume").hidden = true;
     document.getElementById("detail").classList.add("open");
     await refreshDetail();
     clearInterval(logsTimer);
@@ -509,6 +510,8 @@ function closeDetail() {
     clearInterval(logsTimer);
 }
 
+const retryingJobs = new Set();
+
 async function refreshDetail() {
     if (!openDetailId) return;
     let job;
@@ -517,6 +520,7 @@ async function refreshDetail() {
     } catch (e) {
         return;
     }
+    if (job.id !== openDetailId) return;
     const displayName = (job.settings && job.settings.display_filename) || job.original_filename;
     document.getElementById("detail-title").textContent = displayName;
     document.getElementById("detail-id").textContent = `${job.id} · ${job.original_nas_path}`;
@@ -527,6 +531,12 @@ async function refreshDetail() {
     abortBtn.onclick = canAbort ? () => abortJob(job.id) : null;
     document.getElementById("detail-rerun").onclick = () => rerunJob(job.id);
     document.getElementById("detail-delete").onclick = () => deleteJob(job.id);
+    const canRetry = job.status === "failed" || job.status === "needs_restart";
+    document.getElementById("detail-resume").hidden = !canRetry;
+    const retryBtn = document.getElementById("detail-retry");
+    retryBtn.disabled = retryingJobs.has(job.id);
+    retryBtn.textContent = retryingJobs.has(job.id) ? "Queuing…" : "Retry / continue from checkpoint";
+    retryBtn.onclick = canRetry ? () => retryJob(job.id) : null;
 
     let html = "";
 
@@ -567,7 +577,6 @@ async function refreshDetail() {
 
     if ((job.status === "failed" || job.status === "needs_restart") && job.error_message) {
         html += `<div class="error-box">${escapeHtml(job.error_message)}</div>`;
-        html += `<button class="small" onclick="retryJob('${job.id}')">Retry stage</button>`;
     }
 
     if (job.status === "needs_review") {
@@ -615,8 +624,22 @@ async function confirmReview(jobId) {
 }
 
 async function retryJob(jobId) {
-    await api(`/api/jobs/${jobId}/retry`, { method: "POST" });
-    refreshDetail();
+    if (retryingJobs.has(jobId)) return;
+    retryingJobs.add(jobId);
+    const retryBtn = document.getElementById("detail-retry");
+    retryBtn.disabled = true;
+    retryBtn.textContent = "Queuing…";
+    try {
+        await api(`/api/jobs/${jobId}/retry`, { method: "POST" });
+        await refreshJobsNow();
+    } catch (e) {
+        alert("Couldn't retry this job: " + e.message);
+    } finally {
+        retryingJobs.delete(jobId);
+        retryBtn.disabled = false;
+        retryBtn.textContent = "Retry / continue from checkpoint";
+        await refreshDetail();
+    }
 }
 
 function escapeHtml(s) {
