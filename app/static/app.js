@@ -256,6 +256,36 @@ function stageTrack(job) {
     }).join("");
 }
 
+// "running 41%; 32,739 of 80,476 frames; ETA Sun 14:05" -- frame counts and
+// ETA only when the stage reports them. ETA = now + frames remaining x this
+// run's average seconds-per-frame (frames checkpointed before this run
+// started are excluded from the rate); stages without frame counts
+// (HandBrake) fall back to the same math on percent.
+function runningStats(job) {
+    const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
+    const parts = [`running ${pct.toFixed(0)}%`];
+    const now = Date.now() / 1000;
+    const elapsed = job.progress_started_at ? now - job.progress_started_at : 0;
+    let remainingSecs = null;
+    if (job.progress_frames != null && job.progress_total_frames) {
+        const fmt = n => n.toLocaleString();
+        parts.push(`${fmt(job.progress_frames)} of ${fmt(job.progress_total_frames)} frames`);
+        const doneThisRun = job.progress_frames - (job.progress_start_frames ?? 0);
+        if (doneThisRun > 0 && elapsed > 0) {
+            remainingSecs = (job.progress_total_frames - job.progress_frames) * (elapsed / doneThisRun);
+        }
+    } else if (pct > 0 && elapsed > 0) {
+        remainingSecs = (100 - pct) * (elapsed / pct);
+    }
+    if (remainingSecs != null) {
+        const eta = new Date((now + remainingSecs) * 1000);
+        const sameDay = eta.toDateString() === new Date().toDateString();
+        const time = eta.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        parts.push(`ETA ${sameDay ? time : eta.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + time}`);
+    }
+    return parts.join("; ");
+}
+
 function statusLabel(job) {
     if (job.status === "failed" && job.failure_category === "oom") return "FAILED (OOM)";
     if (job.status === "failed" && job.failure_category === "disk_full") return "FAILED (Disk Full)";
@@ -560,8 +590,7 @@ async function refreshDetail() {
         const dotCls = isDone ? "done" : (isCurrent ? "current" : "");
         let label;
         if (isCurrent) {
-            const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
-            label = `${s} (running ${pct.toFixed(0)}%)`;
+            label = `${s} (${runningStats(job)})`;
         } else if (isDone) {
             label = `${s} (done 100%)`;
         } else {

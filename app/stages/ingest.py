@@ -13,7 +13,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from .. import db, naming
+from .. import db, naming, staging
 from ..config import CONFIG
 from ..decoder_util import cuvid_decoder_args
 from ..procutil import run_logged
@@ -27,15 +27,14 @@ def _pick_staging_drive(required_bytes: int) -> str:
     margin = CONFIG["staging_free_space_margin_gb"] * (1024 ** 3)
     for drive in CONFIG["staging_drives"]:
         try:
+            staging.check_filesystem(Path(drive))
             usage = shutil.disk_usage(drive)
-        except OSError:
+        except (OSError, RuntimeError):
             continue
         if usage.free - required_bytes > margin:
             return drive
-    # Nothing comfortably fits -- fall back to the last configured drive and
-    # let the copy fail loudly if it truly doesn't fit, rather than silently
-    # picking a drive we already know is too small.
-    return CONFIG["staging_drives"][-1]
+    raise RuntimeError("Staging pre-flight: no suitable drive with enough space for the source "
+                       "and safety margin; FAT/FAT32 volumes are excluded. Check staging drives.")
 
 
 def _apply_test_crop(job_id: str, staged_file: Path, start_seconds: float, end_seconds: float | None) -> Path:

@@ -7,6 +7,7 @@ from __future__ import annotations
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from . import db, procutil, staging
 from .stages import deinterlace, dehalo, denoise, finalize, ingest, probe, upscale
@@ -72,15 +73,27 @@ def _process_one(job_row) -> None:
     job_id = job_row["id"]
     _current_job_id = job_id
     stage = job_row["stage"]
+    current = job_row["current_file"]
+    if stage not in ("queued", "finalized") and current and not Path(current).exists():
+        # Staged intermediates are gone -- almost always the R:\ RAM disk being
+        # wiped by a reboot. Re-stage from the NAS; the passthrough stages redo
+        # cheaply and generative-upscale checkpoints live on persistent storage.
+        db.log(job_id, stage, f"working file missing ({current}) -- staging was lost, re-staging from source")
+        db.update_job(job_id, stage="queued", current_file=None, staging_dir=None, staging_drive=None)
+        stage = "queued"
     runner = STAGE_RUNNERS.get(stage)
     if runner is None:
         db.log(job_id, stage, f"no runner for stage '{stage}' -- marking failed")
         db.update_job(job_id, status="failed", error_message=f"no runner for stage '{stage}'")
         return
 
-    db.update_job(job_id, status="running", error_message=None, failure_category=None, progress_percent=0)
+    db.update_job(job_id, status="running", error_message=None, failure_category=None, progress_percent=0,
+                  progress_frames=None, progress_total_frames=None,
+                  progress_start_frames=None, progress_started_at=time.time())
     db.log(job_id, stage, f"--- starting stage after '{stage}' ---")
     try:
+        if stage != "queued" and job_row["current_file"]:
+            staging.check_filesystem(Path(job_row["current_file"]))
         runner(job_id)
         # A stage can finish successfully even after kill_active() was
         # called on it (the kill lost the race against the process already

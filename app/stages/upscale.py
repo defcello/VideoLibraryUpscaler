@@ -31,7 +31,7 @@ from typing import Optional
 from .. import db, naming, procutil, vram_probe
 from ..config import CONFIG, load_preset
 from ..decoder_util import cuvid_decoder_args
-from ..procutil import CommandError, ProgressParser, ffmpeg_time_progress, run_logged
+from ..procutil import CommandError, Progress, ProgressParser, ffmpeg_time_progress, run_logged
 from ..topaz_models import build_scale_passes
 
 STAGE = "upscaled"
@@ -185,7 +185,16 @@ def _find_recovered_output(requested_out: Path) -> Optional[Path]:
 
 
 _BLACKDETECT_RE = re.compile(r"black_start:([\d.]+)")
-_CHUNK_SHAPE_RE = re.compile(r"torch\.Size\(\[3, (\d+),")
+# Anchored on "shape of the original video" specifically -- neuroserver logs
+# FIVE `torch.Size([3, N, ...` lines per chunk (original / scaled /
+# overlapped / before padding / after padding), so matching the bare shape
+# counted every chunk 5x and pinned progress at the 99% cap about a fifth of
+# the way through a segment.
+_CHUNK_SHAPE_RE = re.compile(r"shape of the original video: torch\.Size\(\[3, (\d+),")
+# neuroserver's internal encoder's own `frame=N` stats line -- a real count
+# of frames written for the current segment (unlike neuroserver's JSON
+# "frame" field, which isn't frame-accurate).
+_NEURO_FFMPEG_FRAME_RE = re.compile(r"^frame=\s*(\d+)\b")
 
 
 def _blackdetect_boundaries(job_id: str, src: Path, min_spacing: float) -> list[float]:
@@ -238,29 +247,35 @@ def _generative_chunk_progress(seg_start: float, seg_duration: float, total_dura
     """neuroserver's own progress signal is unusable (its "frame" counter
     isn't frame-accurate -- confirmed by testing: it reached 1,098,449 on a
     source with ~50,000 real frames -- and its "progress" field never moves
-    past 5). What IS reliable: it logs one line per internal processing
-    chunk boundary (`shape of the original video: torch.Size([3,
-    <chunk_frames>, H, W])`, confirmed against real logs from a finished
-    job). Counting those lines against the chunk size revealed by the first
-    one gives a genuine, frame-accurate progress fraction for the segment
-    currently running, which this then maps onto the whole job's timeline
-    (segments already checkpointed count as done)."""
-    state: dict = {"total_chunks": None, "chunks_seen": 0}
+    past 5). Two reliable signals instead: one `shape of the original video:
+    torch.Size([3, <chunk_frames>, H, W])` line per internal processing chunk
+    (each marks the previous chunk as consumed), and its internal encoder's
+    `frame=N` stats lines (frames actually written for this segment). The
+    larger of the two is this segment's frame count, which is then mapped
+    onto the whole job's timeline (segments already checkpointed count as
+    done)."""
+    seg_start_frames = round(seg_start * fps)
+    seg_total_frames = max(1, round(seg_duration * fps))
+    job_total_frames = max(1, round(total_duration * fps))
+    state: dict = {"chunks_seen": 0, "chunk_frames": 0, "written": 0}
 
-    def parse(line: str) -> Optional[float]:
+    def parse(line: str):
         if not total_duration:
             return None
         m = _CHUNK_SHAPE_RE.search(line)
-        if not m:
-            return None
-        chunk_frames = int(m.group(1))
-        if state["total_chunks"] is None:
-            total_seg_frames = max(1, round(seg_duration * fps))
-            state["total_chunks"] = max(1, math.ceil(total_seg_frames / chunk_frames))
-        state["chunks_seen"] += 1
-        seg_frac = min(1.0, (state["chunks_seen"] - 1) / state["total_chunks"])
-        overall_seconds = seg_start + seg_frac * seg_duration
-        return max(0.0, min(99.0, overall_seconds / total_duration * 100))
+        if m:
+            state["chunk_frames"] = int(m.group(1))
+            state["chunks_seen"] += 1
+        else:
+            fm = _NEURO_FFMPEG_FRAME_RE.match(line)
+            if not fm:
+                return None
+            state["written"] = max(state["written"], int(fm.group(1)))
+        consumed = (state["chunks_seen"] - 1) * state["chunk_frames"] if state["chunks_seen"] else 0
+        seg_frames = min(seg_total_frames, max(consumed, state["written"]))
+        frames = seg_start_frames + seg_frames
+        pct = max(0.0, min(99.0, frames / job_total_frames * 100))
+        return Progress(pct, frames, job_total_frames)
 
     return parse
 
@@ -359,7 +374,9 @@ def _run_generative_segment(
         # without cwd set here it inherits this server process's cwd instead
         # and fails with "ModuleNotFoundError: No module named 'torch'".
         run_logged(job_id, STAGE, cmd, cwd=Path(NEUROSERVER).parent, extra_env=extra_env, progress=progress)
-    except CommandError:
+    except CommandError as exc:
+        if "out of memory" in exc.tail.lower() or "outofmemoryerror" in exc.tail.lower():
+            raise
         db.log(job_id, STAGE, "neuroserver exited non-zero -- checking for the known recoverable "
                               "post-process-step failure before treating this as a real failure")
 
@@ -429,6 +446,13 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
 
     completed: list[dict] = settings.get("checkpoint_completed_segments") or []
     resume_from = completed[-1]["end"] if completed else 0.0
+    # ETA baseline: frames already checkpointed before this run started don't
+    # count toward this run's frames-per-second rate.
+    src_fps = _current_fps(src)
+    db.update_job(job_id, progress_frames=round(resume_from * src_fps),
+                  progress_start_frames=round(resume_from * src_fps),
+                  progress_total_frames=round(total_duration * src_fps),
+                  progress_percent=round(min(99.0, resume_from / total_duration * 100), 1))
     expected_w: Optional[int] = None
     expected_h: Optional[int] = None
     if completed:
@@ -464,6 +488,8 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
                                         "likely fragmentation; will auto-retry after a server/machine restart")
             return
 
+        db.log(job_id, STAGE, f"VRAM allocation pre-check passed ({preset['max_gpu_mem_gb']} GiB); "
+                              "this does not guarantee inference-time allocations will fit")
         recovered, out_w, out_h = _run_generative_segment(
             job_id, preset, src, resume_from, seg_end, seg_duration, total_duration, len(completed),
         )

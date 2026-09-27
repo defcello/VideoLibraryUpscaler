@@ -1,8 +1,26 @@
 """Reclaim scratch files at stage boundaries without breaking stage retries."""
 from pathlib import Path
+import ctypes
+import os
 
 from . import db
 from .config import CONFIG
+
+
+def check_filesystem(path: Path) -> None:
+    """Video intermediates can exceed FAT's 4 GiB single-file limit."""
+    if os.name != "nt":
+        return
+    root = ctypes.create_unicode_buffer(32768)
+    fs = ctypes.create_unicode_buffer(256)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    if not kernel.GetVolumePathNameW(str(path.resolve()), root, len(root)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not kernel.GetVolumeInformationW(root.value, None, 0, None, None, None, fs, len(fs)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if fs.value.upper() in {"FAT", "FAT32"}:
+        raise RuntimeError(f"Staging pre-flight: {root.value} uses {fs.value}, with a single-file "
+                           "size limit below 4 GiB. Use NTFS or exFAT staging and re-stage this job.")
 
 
 def cleanup(job_id: str) -> None:

@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     crop_end_seconds        REAL,
     failure_category        TEXT,                            -- 'oom' | 'disk_full' | NULL, set on status='failed'
     progress_percent        REAL,                             -- 0-100 within the currently-running stage, NULL if unknown
+    progress_frames          INTEGER,                          -- frames done so far in the running stage (whole-job timeline), NULL if unknown
+    progress_total_frames    INTEGER,                          -- total frames the running stage will produce, NULL if unknown
+    progress_start_frames    INTEGER,                          -- progress_frames already done when this run of the stage began (checkpoint resume), for ETA rate
+    progress_started_at      REAL,                             -- when this run of the running stage began, for ETA rate
     queue_order              INTEGER,                          -- manual position among not-yet-'done' jobs (see reorder_job); irrelevant once status='done'
     completed_at             REAL,                             -- set once, alongside status='done' (see finalize.py); NULL until then
     created_at             REAL NOT NULL,
@@ -131,6 +135,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN dehalo_enabled INTEGER NOT NULL DEFAULT 0")
     if "progress_percent" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN progress_percent REAL")
+    for col, typ in (("progress_frames", "INTEGER"), ("progress_total_frames", "INTEGER"),
+                     ("progress_start_frames", "INTEGER"), ("progress_started_at", "REAL")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
     if "queue_order" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN queue_order INTEGER")
         # Backfill so existing rows keep their current (created_at) order the
