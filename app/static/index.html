@@ -31,18 +31,19 @@
             </div>
         </div>
         <div class="field toggle-stack">
-            <label class="checkbox"><input type="checkbox" id="deinterlace-enabled"> Deinterlace/IVTC</label>
-            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Denoise (HandBrake NLMeans Strong)</label>
-            <label class="checkbox"><input type="checkbox" id="dehalo-enabled"> Dehalo (Topaz Iris + Artemis Strong Halo)</label>
-            <label class="checkbox"><input type="checkbox" id="upscale-enabled"> Upscale (Topaz Video AI)</label>
+            <label class="checkbox"><input type="checkbox" id="deinterlace-enabled"> Normalize to Progressive</label>
+            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Remove Noise/Grain</label>
+            <label class="checkbox"><input type="checkbox" id="deblur-enabled"> Remove Blur</label>
+            <label class="checkbox"><input type="checkbox" id="dehalo-enabled"> Remove Halo</label>
+            <label class="checkbox"><input type="checkbox" id="upscale-enabled"> Upscale to 1080p</label>
         </div>
         <div class="field">
             <label>Content type</label>
             <div class="preset-row">
                 <select id="content-type" style="flex:1"></select>
-                <button class="small" id="preset-toggle" title="Show Topaz processing stack">&#9654;</button>
+                <button class="small" id="preset-toggle" title="Show Processing Stack">&#9654;</button>
             </div>
-            <div class="kv" id="preset-details" hidden></div>
+            <div class="stack-panel" id="preset-details" hidden></div>
         </div>
 
         <div class="field">

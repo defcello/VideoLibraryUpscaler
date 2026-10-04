@@ -47,7 +47,8 @@ readonly database" failures under Windows WAL-mode connection churn.
 
 ### Stage pipeline (app/stages/)
 
-`ingest → probe → deinterlace → denoise → dehalo → upscale → finalize`. Each stage reads/writes the
+`ingest → probe → deinterlace → denoise → deblur → dehalo → upscale → finalize` (UI names: Normalize to
+Progressive, Remove Noise/Grain, Remove Blur, Remove Halo, Upscale to 1080p). Each stage reads/writes the
 job's `settings_json` blob (`db.get_settings`/`db.merge_settings`) to pass detected/computed values
 forward (scan type, crop, PAR, per-stage summaries for the final metadata embed, etc.) rather than
 re-deriving them.
@@ -64,14 +65,18 @@ re-deriving them.
   produce. Plugin DLLs are loaded explicitly by path (`_plugins.vpy.j2`); a few (fft3dfilter, dfttest)
   need `vsfilters\Support` added to the DLL search path via `os.add_dll_directory` because their
   dependency DLLs live in a different folder than the plugin itself — Windows won't find them otherwise.
-- **dehalo** (app/stages/dehalo.py): two chained `tvai_up` passes (Iris then Artemis, both at 1:1 —
-  no resolution change) to remove ringing/halo artifacts from oversharpened DVD sources. The model
-  shortnames/params (`app/presets/dehalo.json`) were reverse-engineered by capturing the real
+- **deblur** / **dehalo** (app/stages/deblur.py, dehalo.py, shared runner `tvai_cleanup.py`): 1:1
+  (no resolution change) `tvai_up` passes — Iris (`app/presets/deblur.json`; Low quality `iris-3` below
+  720p input, Medium quality `iris-2` at 720p+, via the pass's `variants`) for soft/blurry sources,
+  then Artemis Strong Halo (`app/presets/dehalo.json`) for ringing/halo artifacts. These were one
+  combined Iris → Artemis "Dehalo" stage; enabling both reproduces it exactly. The `deblur_enabled`
+  migration backfills from `dehalo_enabled` so pre-split jobs keep running Iris. The model
+  shortnames/params were reverse-engineered by capturing the real
   `ffmpeg.exe` command line Topaz Video AI itself ran for a given GUI enhancement stack, not read off
   the GUI's slider labels — "Recover detail" in particular does **not** show up as a literal `details`
   value in the real command; see the preset's own notes.
-- **denoise** / **dehalo** / **upscale** are each independently toggled (`denoise_enabled`,
-  `dehalo_enabled`, `skip_upscale` — the UI shows the last one inverted as an "Upscale" toggle) and
+- **denoise** / **deblur** / **dehalo** / **upscale** are each independently toggled (`denoise_enabled`,
+  `deblur_enabled`, `dehalo_enabled`, `skip_upscale` — the UI shows the last one inverted as an "Upscale" toggle) and
   early-return as a no-op passthrough when their own flag says not to run. They do **not** cascade off
   of each other — e.g. `skip_upscale` (Upscale off) no longer forces denoise/dehalo to also skip; that
   was the pre-toggle-stack behavior and broke once Dehalo became its own independent toggle sitting
@@ -103,7 +108,7 @@ A job-level flag that makes `upscale.py` no-op — nothing more. It used to also
 to no-op (an "Upscale off means deinterlace-only" mode), but that broke independent toggling once Dehalo
 shipped as its own stage between Denoise and Upscale, so each of the four toggles now only controls its
 own stage. `ingest.py` still short-circuits entirely (no copy, no processing at all — job jumps straight
-to `finalized`) when `skip_upscale` is set AND `denoise_enabled`/`dehalo_enabled` are both off AND the
+to `finalized`) when `skip_upscale` is set AND `denoise_enabled`/`deblur_enabled`/`dehalo_enabled` are all off AND the
 source filename already carries a progressive-resolution tag (e.g. `[1080p]`) — genuinely nothing to do
 in that specific combination; don't widen this check without also checking those two flags.
 

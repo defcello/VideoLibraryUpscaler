@@ -68,6 +68,13 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .stack-row:last-child { border-bottom: none; }
 .stack-label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .stack-note { font-size: 11px; color: var(--text-dim); padding: 0 0 8px; line-height: 1.5; }
+.stack-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; margin-top: 8px; }
+.stack-section { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.stack-section:last-child { border-bottom: none; }
+.stack-section h4 { margin: 0 0 2px; font-size: 13px; }
+.stack-section .stack-row { flex-direction: row; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: none; }
+.stack-section .stack-row > span:last-child { text-align: right; }
+.stack-section .stack-note { padding-bottom: 4px; }
 .stack-note-inline { color: var(--text-dim); font-size: 11px; }
 .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
 select, button, input[type=text] {

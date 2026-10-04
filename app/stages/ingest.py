@@ -71,9 +71,9 @@ def run(job_id: str) -> None:
     if not src.exists():
         raise FileNotFoundError(f"source not found on NAS: {src}")
 
-    nothing_else_to_do = not (job["denoise_enabled"] or job["dehalo_enabled"])
+    nothing_else_to_do = not (job["denoise_enabled"] or job["deblur_enabled"] or job["dehalo_enabled"])
     if job["skip_upscale"] and nothing_else_to_do and naming.has_progressive_res_tag(job["original_filename"]):
-        db.log(job_id, STAGE, "skip_upscale set (with denoise/dehalo also off) and source is already "
+        db.log(job_id, STAGE, "skip_upscale set (with denoise/deblur/dehalo also off) and source is already "
                               "tagged with a progressive resolution (e.g. [1080p]) -- nothing to do, no-op")
         db.update_job(job_id, stage="finalized", status="done", current_file=str(src))
         return

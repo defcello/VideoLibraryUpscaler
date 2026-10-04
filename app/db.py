@@ -24,6 +24,7 @@ STAGES = [
     "probed",
     "deinterlaced",
     "denoised",
+    "deblurred",
     "dehaloed",
     "upscaled",
     "finalized",
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     error_message        TEXT,
     deinterlace_enabled   INTEGER NOT NULL DEFAULT 1,
     denoise_enabled       INTEGER NOT NULL DEFAULT 0,
+    deblur_enabled        INTEGER NOT NULL DEFAULT 0,
     dehalo_enabled        INTEGER NOT NULL DEFAULT 0,
     denoise_tune          TEXT NOT NULL DEFAULT 'none',
     topaz_preset           TEXT NOT NULL DEFAULT 'topaz_default',
@@ -133,6 +135,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN deinterlace_enabled INTEGER NOT NULL DEFAULT 1")
     if "dehalo_enabled" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN dehalo_enabled INTEGER NOT NULL DEFAULT 0")
+    if "deblur_enabled" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN deblur_enabled INTEGER NOT NULL DEFAULT 0")
+        # The Iris pass used to be part of the dehalo stage itself -- carry it
+        # over so existing dehalo jobs that haven't run it yet behave as before.
+        conn.execute("UPDATE jobs SET deblur_enabled = dehalo_enabled")
     if "progress_percent" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN progress_percent REAL")
     for col, typ in (("progress_frames", "INTEGER"), ("progress_total_frames", "INTEGER"),
@@ -163,6 +170,7 @@ def create_job(
     topaz_preset: str,
     skip_upscale: bool = False,
     deinterlace_enabled: bool = True,
+    deblur_enabled: bool = False,
     dehalo_enabled: bool = False,
     crop_start_seconds: Optional[float] = None,
     crop_end_seconds: Optional[float] = None,
@@ -180,14 +188,14 @@ def create_job(
             """INSERT INTO jobs (
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
-                deinterlace_enabled, denoise_enabled, denoise_tune, dehalo_enabled,
+                deinterlace_enabled, denoise_enabled, denoise_tune, deblur_enabled, dehalo_enabled,
                 topaz_preset, skip_upscale,
                 crop_start_seconds, crop_end_seconds, queue_order,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job_id, original_nas_path, original_filename, working_name,
-                int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(dehalo_enabled),
+                int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(deblur_enabled), int(dehalo_enabled),
                 topaz_preset, int(skip_upscale),
                 crop_start_seconds, crop_end_seconds, next_order,
                 now, now,

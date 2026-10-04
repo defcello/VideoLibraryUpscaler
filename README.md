@@ -1,8 +1,8 @@
 # AI Remaster Pipeline
 
 A local pipeline for AI-upscaling an SD/interlaced video library, following a non-generative
-upscaling workflow: **deinterlace/IVTC** → optional **denoise** → optional **dehalo** → **AI
-upscale** → **finalize**. A FastAPI backend runs jobs from a SQLite-backed queue on a background
+upscaling workflow: **normalize to progressive** → optional **remove noise/grain** → optional **remove blur** →
+optional **remove halo** → **AI upscale** → **finalize**. A FastAPI backend runs jobs from a SQLite-backed queue on a background
 worker thread; a plain-JS dashboard (no build step) shows live progress over SSE.
 
 ![Dashboard screenshot](docs/dashboard.png)
@@ -13,10 +13,14 @@ job runs.
 
 ## Stages
 
-1. **Deinterlace/IVTC** — Hybrid's bundled QTGMC/VIVTC via VapourSynth
-2. **Denoise** — HandBrake NLMeans
-3. **Dehalo** — Topaz Iris + Artemis (removes ringing/halo artifacts from oversharpened DVD sources)
-4. **Upscale** — Topaz Video AI, driven headlessly via its bundled ffmpeg
+1. **Normalize to Progressive** — deinterlace/IVTC with Hybrid's bundled QTGMC/VIVTC via VapourSynth
+2. **Remove Noise/Grain** — HandBrake NLMeans
+3. **Remove Blur** — Topaz Iris (recovers detail in soft/blurry sources)
+4. **Remove Halo** — Topaz Artemis Strong Halo (removes ringing/halo artifacts from oversharpened DVD sources)
+5. **Upscale to 1080p** — Topaz Video AI, driven headlessly via its bundled ffmpeg
+
+The dashboard's **Show Processing Stack** panel lists each selected stage's purpose and the
+tools/settings it will use.
 
 Each stage is independently toggleable, and a content-type preset (Film, Film Generative,
 Animation) picks the tuned settings for that run.
@@ -29,15 +33,15 @@ Animation) picks the tuned settings for that run.
 - **[Python 3.10+](https://www.python.org/downloads/)**, with `pip install -r requirements.txt`
   (FastAPI, Uvicorn, Jinja2).
 - **[Topaz Video AI](https://www.topazlabs.com/topaz-video)**, with an active paid subscription —
-  optional; only needed if you enable the Upscale and/or Dehalo stages (both use Topaz models, and
+  optional; only needed if you enable the Upscale, Remove Blur and/or Remove Halo stages (all use Topaz models, and
   every one of them requires a subscription; there is no perpetual-license tier that unlocks them).
-  The pipeline runs fine without Topaz installed as long as both stages stay off.
+  The pipeline runs fine without Topaz installed as long as those stages stay off.
 - **[Hybrid](https://www.selur.de/downloads)** (Selur's VapourSynth-based deinterlacer/encoder
-  GUI) — optional; only needed if you enable the Deinterlace/IVTC stage. Installed for its
+  GUI) — optional; only needed if you enable the Normalize to Progressive stage. Installed for its
   bundled, portable VapourSynth runtime, VSPipe, and QTGMC/VIVTC filter DLLs, which this project
   drives directly so results match what Hybrid's own GUI would produce.
 - **[HandBrakeCLI](https://handbrake.fr/downloads2.php)** — optional; only needed if you enable
-  the Denoise stage (the pipeline runs fine without it as long as Denoise stays off). This is the
+  the Remove Noise/Grain stage (the pipeline runs fine without it as long as that stage stays off). This is the
   separate command-line download, not the regular HandBrake GUI installer — the GUI app doesn't
   include the `HandBrakeCLI.exe` binary this stage shells out to.
 

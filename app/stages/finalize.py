@@ -66,6 +66,8 @@ def run(job_id: str) -> None:
         extra_tags = []
         if settings.get("denoise_summary", "skipped") != "skipped":
             extra_tags.append("Denoised")
+        if settings.get("deblur_summary", "skipped") != "skipped":
+            extra_tags.append("Deblur")
         if settings.get("dehalo_summary", "skipped") != "skipped":
             extra_tags.append("Dehalo")
         final_name = set_final_progressive_tag(
@@ -81,6 +83,7 @@ def run(job_id: str) -> None:
         "SCAN_DETECTION": _scan_summary(settings),
         "DEINTERLACE": settings.get("deinterlace_summary", "skipped"),
         "DENOISE": settings.get("denoise_summary", "skipped"),
+        "DEBLUR": settings.get("deblur_summary", "skipped"),
         "DEHALO": settings.get("dehalo_summary", "skipped"),
         "UPSCALE": settings.get("upscale_summary", "skipped"),
         "PROCESSED": processed_date(),

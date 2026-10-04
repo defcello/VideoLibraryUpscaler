@@ -28,7 +28,7 @@ def load_preset(name: str) -> dict:
         return json.load(f)
 
 
-_NON_TOPAZ_PRESET_FILES = {"denoise_tunes", "content_types", "dehalo"}
+_NON_TOPAZ_PRESET_FILES = {"denoise_tunes", "content_types", "deblur", "dehalo"}
 
 
 def list_presets() -> list[str]:

@@ -1,4 +1,4 @@
-const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "dehaloed", "upscaled", "finalized"];
+const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "deblurred", "dehaloed", "upscaled", "finalized"];
 
 const TRASH_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>`;
 
@@ -88,28 +88,73 @@ async function loadPresets() {
     renderPresetDetails();
 }
 
+// Builds the "Show Processing Stack" panel: one section per stage currently
+// toggled on (plus the always-run output step), each with what the stage is
+// for and the tools/settings it will use -- re-rendered whenever a toggle or
+// the content type changes so it always mirrors what the job would do.
 function renderPresetDetails() {
+    if (!presets) return;
     const key = document.getElementById("content-type").value;
     const type = presets.content_types.types[key];
-    const preset = presets.topaz_presets[type.topaz_preset];
     const d = presets.topaz_preset_display[type.topaz_preset];
-    const tune = presets.denoise_tunes.tunes[type.denoise_tune];
+    const tunes = presets.denoise_tunes;
+    const tune = tunes.tunes[type.denoise_tune];
+    const on = id => document.getElementById(id).checked;
 
     const row = (label, value) => `<div class="stack-row"><span class="stack-label">${label}</span><span>${value}</span></div>`;
+    const section = (title, purpose, rows) =>
+        `<div class="stack-section"><h4>${escapeHtml(title)}</h4><div class="stack-note">${escapeHtml(purpose)}</div>${rows}</div>`;
+    const cleanupRows = preset => {
+        const enc = preset.encoder;
+        return preset.passes.map(p => p.variants
+            ? p.variants.map(v => row(v.min_height ? `Input ≥ ${v.min_height}p` : "Lower inputs",
+                escapeHtml(`Topaz ${p.model_display_name} (${v.model}), ${v.input_condition_label}`))).join("")
+            : row("Model", escapeHtml(`Topaz ${p.model_display_name} (${p.model}), ${p.input_condition_label}`))).join("")
+            + row("Resolution", "unchanged (1:1)")
+            + row("Encoder", escapeHtml(`${enc.codec} (${enc.bitrate_mode}, CQ ${enc.cq})`));
+    };
 
     let html = "";
-    html += row("Model", escapeHtml(d.model_label));
-    html += row("Target resolution", escapeHtml(d.target_tier));
-    html += `<div class="stack-row"><span class="stack-label">Upscale strategy</span></div>`;
-    html += `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`;
-    html += row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
-    if (d.resize_flags) {
-        html += row("Resize filter", `${escapeHtml(d.resize_flags)} <span class="stack-note-inline">(avoids ringing/haloing on hard edges)</span>`);
+    if (on("deinterlace-enabled")) {
+        html += section("Normalize to Progressive",
+            "Converts interlaced or telecined video to clean progressive frames and normalizes crop/aspect ratio. The method is chosen per file by the scan-type probe.",
+            row("Interlaced", "QTGMC Very Slow (Bob, full field rate)")
+            + row("Telecine", "VIVTC IVTC (VFM + VDecimate → 23.976p)")
+            + row("Progressive", "crop/PAR normalize only (stream copy if none needed)")
+            + row("Tools", "Hybrid's VapourSynth (vspipe) → ffmpeg")
+            + row("Encoder", "h264_nvenc (vbr_hq, CQ 14)"));
     }
-    html += row("Denoise tune", escapeHtml(tune.label));
-    html += row("Encoder", escapeHtml(d.encoder_label));
-    html += row("Container", escapeHtml(d.container));
-    html += row("Audio", escapeHtml(d.audio_mode));
+    if (on("denoise-enabled")) {
+        html += section("Remove Noise/Grain",
+            "Reduces film grain, video noise and compression mosquito noise before any AI enhancement.",
+            row("Tool", "HandBrake NLMeans")
+            + row("Strength", escapeHtml(tunes.nlmeans_preset))
+            + row("Tune", escapeHtml(tune.label))
+            + row("Encoder", "nvenc_h264 (q 18)"));
+    }
+    if (on("deblur-enabled")) {
+        const p = presets.cleanup_presets.deblur;
+        html += section("Remove Blur", p.purpose, cleanupRows(p));
+    }
+    if (on("dehalo-enabled")) {
+        const p = presets.cleanup_presets.dehalo;
+        html += section("Remove Halo", p.purpose, cleanupRows(p));
+    }
+    if (on("upscale-enabled")) {
+        let rows = row("Model", escapeHtml(d.model_label))
+            + row("Target resolution", escapeHtml(d.target_tier))
+            + row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
+        if (d.resize_flags) rows += row("Resize filter", escapeHtml(d.resize_flags));
+        rows += row("Encoder", escapeHtml(d.encoder_label));
+        html += section("Upscale to 1080p",
+            "AI-upscales to HD with Topaz Video AI using the selected content type's model.",
+            rows + `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`);
+    }
+    html += section("Output",
+        "Always runs: tags the filename, embeds processing-history metadata and moves the result next to the source.",
+        row("Container", escapeHtml(d.container))
+        + row("Audio", escapeHtml(d.audio_mode))
+        + row("Video", "stream copy (no re-encode)"));
 
     document.getElementById("preset-details").innerHTML = html;
 }
@@ -164,6 +209,7 @@ async function submitJobs() {
                 paths: Array.from(selected),
                 deinterlace_enabled: document.getElementById("deinterlace-enabled").checked,
                 denoise_enabled: document.getElementById("denoise-enabled").checked,
+                deblur_enabled: document.getElementById("deblur-enabled").checked,
                 dehalo_enabled: document.getElementById("dehalo-enabled").checked,
                 content_type: document.getElementById("content-type").value,
                 // The API's "skip_upscale" field predates the toggle stack and is
@@ -195,6 +241,7 @@ function initTestCropToggle() {
 const TOGGLE_STACK = {
     "deinterlace-enabled": ["deinterlaceEnabled", true],
     "denoise-enabled": ["denoiseEnabled", false],
+    "deblur-enabled": ["deblurEnabled", false],
     "dehalo-enabled": ["dehaloEnabled", false],
     "upscale-enabled": ["upscaleEnabled", true],
 };
@@ -208,6 +255,7 @@ function initToggleStack() {
         } catch (e) { cb.checked = defaultChecked; /* private browsing etc */ }
         cb.onchange = () => {
             try { localStorage.setItem(key, cb.checked); } catch (e) { /* ignore */ }
+            if (!document.getElementById("preset-details").hidden) renderPresetDetails();
         };
     }
 }
@@ -232,6 +280,7 @@ function isStageSkipped(job, i) {
     switch (STAGES[i]) {
         case "deinterlaced": return !job.deinterlace_enabled;
         case "denoised": return !job.denoise_enabled;
+        case "deblurred": return !job.deblur_enabled;
         case "dehaloed": return !job.dehalo_enabled;
         case "upscaled": return !!job.skip_upscale;
         default: return false;
@@ -575,7 +624,7 @@ async function refreshDetail() {
     html += `<div class="stack-note" style="margin-bottom:12px">${outputName ? escapeHtml(outputName) : "(not yet produced)"}</div>`;
 
     // Only the stages actually selected for this job are shown -- a job's
-    // toggled-off stages (deinterlace/denoise/dehalo/upscale) are permanently
+    // toggled-off stages (deinterlace/denoise/deblur/dehalo/upscale) are permanently
     // no-op passthroughs, so listing them just as "(skipped)" clutters the
     // one place meant to give an at-a-glance read of how much work (and
     // roughly how long) a job actually involves.

@@ -74,6 +74,17 @@ def add_denoised_tag(filename: str) -> str:
     return join_tags(base, out, ext)
 
 
+def add_deblur_tag(filename: str) -> str:
+    base, tags, ext = split_tags(filename)
+    out = []
+    for t in tags:
+        if RES_TAG_RE.match(t.strip()) and "deblur" not in t.lower() and not t.lower().startswith("upscaled"):
+            out.append(f"{t} Deblur")
+        else:
+            out.append(t)
+    return join_tags(base, out, ext)
+
+
 def add_dehalo_tag(filename: str) -> str:
     base, tags, ext = split_tags(filename)
     out = []

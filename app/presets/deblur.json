@@ -1,0 +1,42 @@
+{
+    "description": "Remove Blur pass: Topaz Video AI Iris run at 1:1 (no resolution change) between Remove Noise/Grain and Remove Halo, to recover detail in soft/blurry sources. Originally the 1st pass of a captured Iris -> Artemis GUI stack (1st enhancement = Iris, Input condition = Medium quality, Advanced tuning = Automatic, Recover detail = 100); split out so blurry video without haloing can be cleaned up without the dehalo model. Parameters match the real ffmpeg.exe command line Topaz Video AI ran, not a literal reading of the GUI sliders.",
+    "_note_recover_detail": "Despite 'Recover detail = 100' being set in the GUI, the captured command line shows details=0 -- Advanced tuning = Automatic instead enables estimate=8 (auto frame-sampled parameter analysis), which is what actually drives detail recovery, not the manual 'details' AVOption.",
+
+    "purpose": "Recovers detail and sharpness in soft or blurry sources without changing resolution.",
+
+    "passes": [
+        {
+            "model_display_name": "Iris",
+            "variants": [
+                {"min_height": 720, "model": "iris-2", "input_condition_label": "Medium quality"},
+                {"min_height": 0, "model": "iris-3", "input_condition_label": "Low quality"}
+            ],
+            "_note_variants": "Picked by the stage's input height: first entry whose min_height <= height wins. Shortnames confirmed against the installed model JSONs (iris-2 gui name 'Iris - Medium Quality', iris-3 'Iris - Low Quality'); both expose the same parameters, so the captured Medium-quality params are reused for Low quality.",
+            "params": {
+                "scale": 1,
+                "preblur": 0,
+                "noise": 0,
+                "details": 0,
+                "halo": 0,
+                "blur": 0,
+                "compression": 0,
+                "estimate": 8,
+                "blend": 1,
+                "device": -2,
+                "vram": 0.8,
+                "instances": 1
+            }
+        }
+    ],
+
+    "resize_flags": "lanczos",
+
+    "encoder": {
+        "codec": "h264_nvenc",
+        "preset": "p6",
+        "bitrate_mode": "vbr_hq",
+        "cq": 14,
+        "profile": "high",
+        "_note": "Mezzanine-quality encode (cq=14), same as deinterlace.py/dehalo -- this output feeds later stages, not the end user."
+    }
+}

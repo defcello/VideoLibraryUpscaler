@@ -1,27 +1,10 @@
 {
-    "description": "Dehalo pre-clean pass: two chained Topaz Video AI models run at 1:1 (no resolution change) between denoise and upscale, to remove ringing/halo artifacts from oversharpened DVD sources. The model shortnames and parameters here are NOT guessed from the GUI's slider labels -- they were reverse-engineered by capturing the real ffmpeg.exe command line Topaz Video AI itself ran for this exact GUI stack (1st enhancement = Iris, Input condition = Medium quality, Advanced tuning = Automatic, Recover detail = 100; 2nd enhancement = Artemis, Input condition = Strong Halo, Recover detail = 100).",
-    "_note_recover_detail": "Despite 'Recover detail = 100' being set in the GUI for both passes, the captured command line shows details=0 for pass 1 -- Advanced tuning = Automatic instead enables estimate=8 (auto frame-sampled parameter analysis), which is what actually drives detail recovery, not the manual 'details' AVOption. Pass 2 (alqs-2) exposes no detail/noise AVOptions in the captured command at all. This preset intentionally matches the real command line, not a literal reading of the GUI sliders.",
+    "description": "Remove Halo pass: Topaz Video AI Artemis (Strong Halo) run at 1:1 (no resolution change) between Remove Blur and upscale, to remove ringing/halo artifacts from oversharpened DVD sources. Originally the 2nd pass of a captured Iris -> Artemis GUI stack (2nd enhancement = Artemis, Input condition = Strong Halo, Recover detail = 100); the Iris pass now lives in deblur.json as its own stage. Parameters match the real ffmpeg.exe command line Topaz Video AI ran, not a literal reading of the GUI sliders.",
+    "_note_recover_detail": "alqs-2 exposes no detail/noise AVOptions in the captured command at all, despite 'Recover detail = 100' being set in the GUI.",
+
+    "purpose": "Removes ringing/halo outlines around hard edges, typical of oversharpened DVD masters.",
 
     "passes": [
-        {
-            "model": "iris-2",
-            "model_display_name": "Iris",
-            "input_condition_label": "Medium quality",
-            "params": {
-                "scale": 1,
-                "preblur": 0,
-                "noise": 0,
-                "details": 0,
-                "halo": 0,
-                "blur": 0,
-                "compression": 0,
-                "estimate": 8,
-                "blend": 1,
-                "device": -2,
-                "vram": 0.8,
-                "instances": 1
-            }
-        },
         {
             "model": "alqs-2",
             "model_display_name": "Artemis",
