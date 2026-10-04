@@ -117,6 +117,8 @@ tr.job-row.selected { background: var(--panel-2); }
 .stage-list-row.current { color: var(--accent); font-weight: 600; }
 .stage-list-row.done { color: var(--green); }
 .stage-list-row.pending { color: var(--text-dim); }
+.stage-detail { margin-left: 18px; font-size: 11px; color: var(--text-dim); }
+.stage-detail strong { color: var(--text); font-weight: 600; }
 
 .stage-track { display: flex; gap: 3px; align-items: center; }
 .stage-dot { width: 16px; height: 6px; border-radius: 3px; background: var(--border); }

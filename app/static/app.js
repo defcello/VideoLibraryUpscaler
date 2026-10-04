@@ -88,6 +88,23 @@ async function loadPresets() {
     renderPresetDetails();
 }
 
+// Which workflow(s) a submission would use: just one for a concrete content
+// type, or every distinct workflow Auto-Detect could pick (the probe stage
+// decides per file) -- each with the content types that lead to it.
+function workflowsFor(key, generative) {
+    const ct = presets.content_types;
+    const pick = t => ct.workflows[generative ? t.generative_workflow : t.workflow];
+    if (!ct.types[key].auto) return [{ when: null, wf: pick(ct.types[key]) }];
+    const groups = new Map();
+    for (const t of Object.values(ct.types)) {
+        if (t.auto) continue;
+        const wf = pick(t);
+        if (!groups.has(wf.label)) groups.set(wf.label, { whens: [], wf });
+        groups.get(wf.label).whens.push(t.label);
+    }
+    return [...groups.values()].map(g => ({ when: g.whens.join(" / "), wf: g.wf }));
+}
+
 // Builds the "Show Processing Stack" panel: one section per stage currently
 // toggled on (plus the always-run output step), each with what the stage is
 // for and the tools/settings it will use -- re-rendered whenever a toggle or
@@ -95,10 +112,9 @@ async function loadPresets() {
 function renderPresetDetails() {
     if (!presets) return;
     const key = document.getElementById("content-type").value;
-    const type = presets.content_types.types[key];
-    const d = presets.topaz_preset_display[type.topaz_preset];
+    const isAuto = !!presets.content_types.types[key].auto;
+    const workflows = workflowsFor(key, document.getElementById("allow-generative").checked);
     const tunes = presets.denoise_tunes;
-    const tune = tunes.tunes[type.denoise_tune];
     const on = id => document.getElementById(id).checked;
 
     const row = (label, value) => `<div class="stack-row"><span class="stack-label">${label}</span><span>${value}</span></div>`;
@@ -115,6 +131,12 @@ function renderPresetDetails() {
     };
 
     let html = "";
+    if (isAuto) {
+        html += section("Detect Content Type",
+            "Runs during the probe step: samples frames across each file and classifies them as Live Action, 2D Graphics, 3D Graphics or Mixed, then picks that type's workflow below.",
+            row("Method", "CLIP image embeddings + classifier trained on the Disc Library")
+            + row("Runs on", "CPU (doesn't use the GPU's VRAM)"));
+    }
     if (on("deinterlace-enabled")) {
         html += section("Normalize to Progressive",
             "Converts interlaced or telecined video to clean progressive frames and normalizes crop/aspect ratio. The method is chosen per file by the scan-type probe.",
@@ -129,7 +151,8 @@ function renderPresetDetails() {
             "Reduces film grain, video noise and compression mosquito noise before any AI enhancement.",
             row("Tool", "HandBrake NLMeans")
             + row("Strength", escapeHtml(tunes.nlmeans_preset))
-            + row("Tune", escapeHtml(tune.label))
+            + workflows.map(({ when, wf }) =>
+                row(when ? `Tune (${escapeHtml(when)})` : "Tune", escapeHtml(tunes.tunes[wf.denoise_tune].label))).join("")
             + row("Encoder", "nvenc_h264 (q 18)"));
     }
     if (on("deblur-enabled")) {
@@ -141,15 +164,22 @@ function renderPresetDetails() {
         html += section("Remove Halo", p.purpose, cleanupRows(p));
     }
     if (on("upscale-enabled")) {
-        let rows = row("Model", escapeHtml(d.model_label))
-            + row("Target resolution", escapeHtml(d.target_tier))
-            + row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
-        if (d.resize_flags) rows += row("Resize filter", escapeHtml(d.resize_flags));
-        rows += row("Encoder", escapeHtml(d.encoder_label));
+        const rows = workflows.map(({ when, wf }) => {
+            const d = presets.topaz_preset_display[wf.topaz_preset];
+            let r = when ? `<div class="stack-note"><strong>${escapeHtml(when)}</strong> → ${escapeHtml(wf.label)}</div>` : "";
+            r += row("Model", escapeHtml(d.model_label))
+                + row("Target resolution", escapeHtml(d.target_tier))
+                + row("Pre-clean (Nyx)", d.precleanup_enabled ? escapeHtml(d.precleanup_label) : "disabled");
+            if (d.resize_flags) r += row("Resize filter", escapeHtml(d.resize_flags));
+            r += row("Encoder", escapeHtml(d.encoder_label));
+            return r + `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`;
+        }).join("");
         html += section("Upscale to 1080p",
-            "AI-upscales to HD with Topaz Video AI using the selected content type's model.",
-            rows + `<div class="stack-note">${escapeHtml(d.upscale_strategy)}</div>`);
+            isAuto ? "AI-upscales to HD with Topaz Video AI, using the workflow for each file's detected content type."
+                   : "AI-upscales to HD with Topaz Video AI using the selected content type's model.",
+            rows);
     }
+    const d = presets.topaz_preset_display[workflows[0].wf.topaz_preset];
     html += section("Output",
         "Always runs: tags the filename, embeds processing-history metadata and moves the result next to the source.",
         row("Container", escapeHtml(d.container))
@@ -212,6 +242,7 @@ async function submitJobs() {
                 deblur_enabled: document.getElementById("deblur-enabled").checked,
                 dehalo_enabled: document.getElementById("dehalo-enabled").checked,
                 content_type: document.getElementById("content-type").value,
+                allow_generative: document.getElementById("allow-generative").checked,
                 // The API's "skip_upscale" field predates the toggle stack and is
                 // kept internally (server/db) to avoid a schema rename -- the UI
                 // now shows its inverse as an "Upscale" toggle.
@@ -355,9 +386,43 @@ function checkpointSummary(job) {
     return `${segs.length} checkpoint segment(s) complete, resuming from ${mins}:${String(secs).padStart(2, "0")}`;
 }
 
+// Sub-line under the probe stage in the detail pane: the content-type
+// decision (made during probe for Auto-Detect jobs -- see probe.py's
+// _detect_content_type) and which workflow it put the job on.
+function contentTypeDetailHtml(job, probeDone, probeRunning) {
+    if (!job.content_type || !presets) return "";  // pre-content-type jobs
+    const types = presets.content_types.types;
+    const gen = !!job.allow_generative;
+    const line = text => `<div class="stage-detail">${text}</div>`;
+    const cd = (job.settings || {}).content_detect;
+    if (!types[job.content_type]?.auto) {
+        const wf = workflowsFor(job.content_type, gen)[0].wf;
+        return line(`Content type: <strong>${escapeHtml(types[job.content_type].label)}</strong> (chosen) → ${escapeHtml(wf.label)}`);
+    }
+    if (cd && cd.fallback) {
+        return line(`Content type: auto-detect <strong>failed</strong> — using ${escapeHtml(cd.label)} fallback`)
+            + line(escapeHtml(cd.error || ""));
+    }
+    if (cd) {
+        const pct = x => `${Math.round((x || 0) * 100)}%`;
+        const sh = cd.shares || {};
+        return line(`Content type: <strong>${escapeHtml(cd.label)}</strong> (auto-detected, confidence ${cd.confidence.toFixed(2)}) → ${escapeHtml(cd.workflow)}`)
+            + line(`Live ${pct(sh.live)} · 2D ${pct(sh["2d"])} · 3D ${pct(sh["3d"])} of ${cd.frames} sampled frames`);
+    }
+    if (probeRunning) return line("Content type: detecting…");
+    return line(probeDone ? "Content type: Auto-Detect (no result recorded)" : "Content type: Auto-Detect (decided during this stage)");
+}
+
 function settingsSummary(job) {
     const s = job.settings || {};
     const bits = [];
+    if (s.content_detect) {
+        bits.push(s.content_detect.fallback ? `${s.content_detect.label} (detect failed)` : `${s.content_detect.label} (auto)`);
+    } else if (job.content_type && presets) {
+        const t = presets.content_types.types[job.content_type];
+        if (t) bits.push(t.auto ? "Auto-Detect…" : t.label);
+    }
+    if (job.allow_generative) bits.push("generative");
     if (s.scan_type) bits.push(s.scan_type);
     if (typeof s.confidence === "number") bits.push(`conf ${s.confidence.toFixed(2)}`);
     if (s.width && s.height) bits.push(`${s.width}x${s.height}`);
@@ -645,7 +710,8 @@ async function refreshDetail() {
         } else {
             label = s;
         }
-        return `<div class="stage-list-row ${cls}"><span class="stage-dot ${dotCls}"></span>${escapeHtml(label)}</div>`;
+        const row = `<div class="stage-list-row ${cls}"><span class="stage-dot ${dotCls}"></span>${escapeHtml(label)}</div>`;
+        return s === "probed" ? row + contentTypeDetailHtml(job, isDone, isCurrent) : row;
     }).join("") + `</div>`;
 
     const checkpointNote = checkpointSummary(job);
@@ -786,7 +852,8 @@ document.getElementById("resume-btn").onclick = resumeWorker;
 document.getElementById("delete-done-btn").onclick = deleteDoneJobs;
 document.getElementById("detail-close").onclick = closeDetail;
 document.getElementById("preset-toggle").onclick = togglePresetDetails;
-document.getElementById("content-type").onchange = () => {
+document.getElementById("content-type").onchange =
+document.getElementById("allow-generative").onchange = () => {
     if (!document.getElementById("preset-details").hidden) renderPresetDetails();
 };
 

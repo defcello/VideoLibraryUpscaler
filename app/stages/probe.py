@@ -12,6 +12,10 @@ Three-tier detection, cheapest first:
      interlaced 60i -- the case the guide explicitly warns idet-style ratios
      alone can get wrong.
 
+Also runs content-type auto-detection (app/content_detect.py) for jobs
+submitted as "Auto-Detect", replacing the job's fallback topaz_preset /
+denoise_tune with the detected type's workflow -- see _detect_content_type.
+
 A job only auto-proceeds past this stage when its confidence clears
 config.json's probe.confidence_threshold; otherwise it's marked
 `needs_review` so a bad guess doesn't get committed to on an unattended
@@ -26,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import db, naming
-from ..config import CONFIG
+from ..config import CONFIG, load_preset, resolve_workflow
 from ..decoder_util import cuvid_decoder_args
 from ..vpy_render import render
 
@@ -119,6 +123,58 @@ def _cadence_dry_run(job_id: str, path: Path, tff: bool, sample_frames: int = 30
     return None
 
 
+def _segments(timeline: list) -> str:
+    """[(seconds, class), ...] -> compact run-length summary for the log,
+    e.g. "0:12-1:40 live, 1:52-3:05 2d" (runs of 2+ samples only)."""
+    runs = []
+    for ts, k in timeline:
+        if runs and runs[-1][2] == k:
+            runs[-1][1] = ts
+            runs[-1][3] += 1
+        else:
+            runs.append([ts, ts, k, 1])
+    fmt = lambda t: f"{int(t) // 60}:{int(t) % 60:02d}"
+    return ", ".join(f"{fmt(a)}-{fmt(b)} {k}" for a, b, k, n in runs if n >= 2) or "(no sustained runs)"
+
+
+def _detect_content_type(job_id: str, job, path: Path) -> None:
+    """For 'auto' jobs: classify the staged file and switch the job onto the
+    detected type's workflow. Any detector failure keeps the job's fallback
+    workflow (content_types.json's auto_fallback, set at submission) rather
+    than failing the job -- one odd file shouldn't stall an unattended batch --
+    but it's logged loudly and recorded in settings for the UI."""
+    if job["content_type"] != "auto":
+        return
+    ct = load_preset("content_types")
+    types = ct["types"]
+    try:
+        from .. import content_detect
+        db.log(job_id, STAGE, "content detect: sampling frames (CLIP, CPU)...")
+        r = content_detect.detect(path, log=lambda m: db.log(job_id, STAGE, m))
+        detected = r["content_type"]
+        if detected is None:
+            raise RuntimeError(r.get("reason", "no result"))
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        fallback = ct["auto_fallback"]
+        db.log(job_id, STAGE, f"content detect FAILED ({type(e).__name__}: {e}) -- "
+                              f"keeping fallback workflow for '{types[fallback]['label']}'")
+        db.merge_settings(job_id, {"content_detect": {"error": f"{type(e).__name__}: {e}", "content_type": fallback,
+                                                       "label": types[fallback]["label"], "fallback": True}})
+        return
+
+    workflow = resolve_workflow(detected, bool(job["allow_generative"]))
+    db.log(job_id, STAGE, f"content detect: {types[detected]['label']} (confidence {r['confidence']:.2f}; "
+                          f"frame shares live={r['shares']['live']:.0%} 2d={r['shares']['2d']:.0%} "
+                          f"3d={r['shares']['3d']:.0%} over {r['confident_frames']}/{r['frames']} frames) "
+                          f"-> {workflow['label']} workflow")
+    db.log(job_id, STAGE, f"content detect timeline: {_segments(r['timeline'])}")
+    db.update_job(job_id, topaz_preset=workflow["topaz_preset"], denoise_tune=workflow["denoise_tune"])
+    db.merge_settings(job_id, {"content_detect": {
+        "content_type": detected, "label": types[detected]["label"], "confidence": r["confidence"],
+        "shares": r["shares"], "frames": r["frames"], "workflow": workflow["label"],
+    }})
+
+
 def run(job_id: str) -> None:
     job = db.get_job(job_id)
     path = Path(job["current_file"])
@@ -132,6 +188,10 @@ def run(job_id: str) -> None:
     duration = float(info.get("format", {}).get("duration") or vstream.get("duration") or 0)
     container_field_order = vstream.get("field_order", "unknown")  # progressive/tt/bb/tb/bt/unknown
     db.log(job_id, STAGE, f"ffprobe: {width}x{height} PAR {par_num}:{par_den} field_order={container_field_order} duration={duration:.1f}s")
+
+    # Before any of the needs_review early-outs below, so a job approved
+    # through review already has its detected workflow.
+    _detect_content_type(job_id, job, path)
 
     # --- idet sampling across a few points in the file ---
     n_points = CONFIG["probe"]["idet_sample_points"]

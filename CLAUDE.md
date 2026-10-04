@@ -142,10 +142,55 @@ in that specific combination; don't widen this check without also checking those
 
 ### Content types / presets (app/presets/)
 
-The UI exposes a "Film (Non-Generative)" / "Film (Generative)" / "Animation" choice
-(`content_types.json`); the server resolves that to a `(topaz_preset, denoise_tune)` pair before
-creating the job (`server.py`'s `api_create_jobs`) — the frontend never needs to know individual
-preset filenames. Presets (`topaz_film.json`, `topaz_animation.json`, `topaz_film_generative.json`)
+The UI exposes a "Content type" choice (Auto-Detect / 2D Graphics / 3D Graphics / Live Action /
+Mixed) plus an "Allow Generative Tools" checkbox. `content_types.json` maps each type to a
+`workflow` and a `generative_workflow` (2D → Animation either way; the rest → Film or Film
+(Generative)), and `config.resolve_workflow()` turns that into the job's `(topaz_preset,
+denoise_tune)` pair at submission — the frontend never needs to know individual preset filenames.
+The submitted choice is kept in the `content_type` / `allow_generative` columns (NULL / 0 on jobs
+from before this existed); `topaz_preset`/`denoise_tune` remain what the stages actually read.
+
+**Auto-Detect** (`app/content_detect.py`): an `auto` job is created with `auto_fallback`'s workflow
+(Mixed → Film), and `probe.py`'s `_detect_content_type` replaces it per file — deliberately *before*
+probe's `needs_review` early-outs, so a job approved through review already has its workflow.
+Detector failure keeps the fallback and records `settings.content_detect.fallback` rather than failing
+the job (one odd file shouldn't stall an unattended batch).
+
+The detector grabs frames via the **GPL ffmpeg** (`tools.ffmpeg_libx264` — Topaz's build can't
+software-decode H.264, and OpenCV's seeking took 90s+ for 20 frames on some MPEG-2 DVD remuxes),
+rejects black frames using the **same `config.json` `blackdetect` pix_th/pic_th** the generative
+checkpointing uses (a sample landing on a black inter-scene gap is retried 1.5s later rather than
+dropped), trims letterbox bars, drops fades/flat cards, embeds with CLIP ViT-B-32 on **CPU** (never
+competes with Topaz for VRAM; weights download to the Hugging Face cache on first use), and
+classifies each frame live/2d/3d with a linear head (`app/models/content_head.npz`) trained on the
+Disc Library. **Sampling is sequential**: 32 frames first, then each round adds the midpoints between
+every already-tried timestamp until `aggregate()` reports `settled` (95% Wilson interval of the deciding
+share clear of its threshold) or `max_frames`/`min_spacing_seconds` is hit — most files settle in 1–2
+rounds (3–14s each on DVD episodes). **Mixed** needs the minority side (live vs animated) at
+`mixed_min_share` (0.07) AND in `mixed_min_segments` (3) separate stretches of the timeline: a few
+misread shots in a live film are one stretch; real mixed content keeps coming back. All of these knobs
+live in the head file's `params` (set in `train_content_detector.DEFAULT_PARAMS`, grid-searched on the
+same title-held-out splits).
+
+Only 2D vs everything-else changes the workflow (Live Action / 3D / Mixed all use Film), so that's the
+metric that matters: held-out-title workflow accuracy is 100% / 99.1% / 99.1% over three splits, and a
+head trained on **no** Beavis and Butt-Head at all still calls 45/46 B&B MTV Clips / interleaved files
+Mixed. The remaining errors are mostly Live ↔ 3D ↔ Mixed on CGI-heavy live action (Star Wars, *The
+Little Mermaid* 2023) or photoreal CG (*Final Fantasy: The Spirits Within* reads as live) — harmless,
+same workflow. *The Animatrix* (anime + photoreal CG shorts) reads as Mixed → Film.
+
+Training (`tools/train_content_detector.py`) uses scikit-learn's `LogisticRegression` (training-only
+dependency; runtime inference is plain numpy). **Don't go back to hand-rolled gradient descent**: the
+original fixed-step version was unstable — one cross-validation split collapsed into calling every
+live-action title 2D. `train` also writes `app/models/content_head.index.json` alongside the model:
+every source file (path relative to the library root, e.g. `Series/...`, label, title group, train vs evaluation-only) with the exact timestamp and
+frame number of every frame used, plus the sampling/CLIP/solver settings — commit it with the model so
+the training set can be rebuilt or audited. Labels come from `tools/content_detect_manifest.py` (title
+lists + `EXCLUDE` for bonus/menu content + hand-checked `OVERRIDES`). Retrain with
+`content_detect_manifest.py` → `train_content_detector.py extract` (cached per file, ~45 min over the
+NAS for ~430 files) → `train` (titles, not frames, are held out; prints a `WORKFLOW` line per split).
+
+Presets (`topaz_film.json`, `topaz_animation.json`, `topaz_film_generative.json`)
 are meant to be hand-tuned over time, not treated as fixed; `resize_flags`, `tvai_up_params`, and
 encoder settings are all preset-level knobs.
 

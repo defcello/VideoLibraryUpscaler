@@ -2,3 +2,9 @@ fastapi
 uvicorn[standard]
 python-multipart
 jinja2
+open_clip_torch
+torch  # CPU build is enough: pip install torch --index-url https://download.pytorch.org/whl/cpu
+numpy
+opencv-python
+pillow
+scikit-learn  # training only (tools/train_content_detector.py)

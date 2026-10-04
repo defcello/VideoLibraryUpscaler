@@ -22,8 +22,9 @@ job runs.
 The dashboard's **Show Processing Stack** panel lists each selected stage's purpose and the
 tools/settings it will use.
 
-Each stage is independently toggleable, and a content-type preset (Film, Film Generative,
-Animation) picks the tuned settings for that run.
+Each stage is independently toggleable, and a content type (Live Action, 2D Graphics,
+3D Graphics, Mixed — or Auto-Detect, which classifies each file with a CLIP-based detector) plus an
+"Allow Generative Tools" switch picks the tuned settings for that run.
 
 ## Requirements
 

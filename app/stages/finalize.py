@@ -42,6 +42,15 @@ def _scan_summary(settings: dict) -> str:
     return f"{settings.get('scan_type', '?')} (tff={settings.get('tff')}, confidence={conf_str})"
 
 
+def _content_summary(job, settings: dict) -> str:
+    cd = settings.get("content_detect")
+    if not cd:
+        return job["content_type"] or "n/a"
+    if cd.get("fallback"):
+        return f"{cd['label']} (auto-detect failed, fallback)"
+    return f"{cd['label']} (auto-detected, confidence {cd['confidence']:.2f})"
+
+
 def _unique_destination(dest: Path) -> Path:
     if not dest.exists():
         return dest
@@ -81,6 +90,7 @@ def run(job_id: str) -> None:
         "TOOL": "AI Remaster Pipeline",
         "SOURCE_FILE": job["original_filename"],
         "SCAN_DETECTION": _scan_summary(settings),
+        "CONTENT_TYPE": _content_summary(job, settings),
         "DEINTERLACE": settings.get("deinterlace_summary", "skipped"),
         "DENOISE": settings.get("denoise_summary", "skipped"),
         "DEBLUR": settings.get("deblur_summary", "skipped"),

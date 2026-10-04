@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db, procutil, worker
-from .config import CONFIG, STATIC_DIR, list_presets, load_preset
+from .config import CONFIG, STATIC_DIR, list_presets, load_preset, resolve_workflow
 from .topaz_models import available_scales, describe_upscale_strategy
 
 app = FastAPI(title="AI Remaster Pipeline")
@@ -59,6 +59,7 @@ class CreateJobsRequest(BaseModel):
     deblur_enabled: bool = False
     dehalo_enabled: bool = False
     content_type: str = load_preset("content_types")["default"]
+    allow_generative: bool = False
     skip_upscale: bool = False
     crop_start_seconds: Optional[float] = None
     crop_end_seconds: Optional[float] = None
@@ -104,11 +105,13 @@ def api_get_job(job_id: str):
 
 @app.post("/api/jobs")
 def api_create_jobs(req: CreateJobsRequest):
-    content_types = load_preset("content_types")["types"]
-    if req.content_type not in content_types:
+    try:
+        # For 'auto' this is only the fallback workflow -- probe.py replaces
+        # it per file once the content detector has run.
+        resolved = resolve_workflow(req.content_type, req.allow_generative)
+    except KeyError:
         print(f"[api_create_jobs] 400: unknown content_type={req.content_type!r} paths={req.paths}")
         raise HTTPException(400, f"unknown content_type: {req.content_type}")
-    resolved = content_types[req.content_type]
 
     if req.crop_start_seconds is not None and req.crop_end_seconds is not None:
         if req.crop_end_seconds <= req.crop_start_seconds:
@@ -131,6 +134,8 @@ def api_create_jobs(req: CreateJobsRequest):
             dehalo_enabled=req.dehalo_enabled,
             denoise_tune=resolved["denoise_tune"],
             topaz_preset=resolved["topaz_preset"],
+            content_type=req.content_type,
+            allow_generative=req.allow_generative,
             skip_upscale=req.skip_upscale,
             crop_start_seconds=req.crop_start_seconds,
             crop_end_seconds=req.crop_end_seconds,
@@ -220,6 +225,9 @@ def api_rerun_job(job_id: str):
         dehalo_enabled=bool(row["dehalo_enabled"]),
         denoise_tune=row["denoise_tune"],
         topaz_preset=row["topaz_preset"],
+        # An 'auto' job re-detects in the new job's own probe stage.
+        content_type=row["content_type"],
+        allow_generative=bool(row["allow_generative"]),
         skip_upscale=bool(row["skip_upscale"]),
         crop_start_seconds=row["crop_start_seconds"],
         crop_end_seconds=row["crop_end_seconds"],

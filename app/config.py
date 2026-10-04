@@ -28,6 +28,18 @@ def load_preset(name: str) -> dict:
         return json.load(f)
 
 
+def resolve_workflow(content_type: str, allow_generative: bool) -> dict:
+    """content_types.json type key + the 'Allow Generative Tools' flag ->
+    that type's workflow dict ({label, topaz_preset, denoise_tune}). 'auto'
+    resolves to its configured fallback type -- the probe stage's detector
+    replaces it per file. Raises KeyError for an unknown type."""
+    ct = load_preset("content_types")
+    t = ct["types"][content_type]
+    if t.get("auto"):
+        t = ct["types"][ct["auto_fallback"]]
+    return ct["workflows"][t["generative_workflow"] if allow_generative else t["workflow"]]
+
+
 _NON_TOPAZ_PRESET_FILES = {"denoise_tunes", "content_types", "deblur", "dehalo"}
 
 

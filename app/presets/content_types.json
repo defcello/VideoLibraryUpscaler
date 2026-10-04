@@ -1,6 +1,6 @@
 {
-    "description": "The single 'content type' choice shown in the UI resolves to a (topaz_preset, denoise_tune) pair server-side, so the frontend only needs one dropdown instead of two separate ones that had to be kept in sync by hand.",
-    "types": {
+    "description": "The 'Content type' choice + 'Allow Generative Tools' checkbox shown in the UI resolve server-side to one of the workflows below, i.e. a (topaz_preset, denoise_tune) pair -- so the frontend never needs to know individual preset filenames. 'auto' defers the choice to the probe stage's content detector (app/content_detect.py), which picks one of the concrete types per file.",
+    "workflows": {
         "film": {
             "label": "Film (Non-Generative)",
             "topaz_preset": "topaz_film",
@@ -17,5 +17,34 @@
             "denoise_tune": "animation"
         }
     },
-    "default": "film"
+    "types": {
+        "auto": {
+            "label": "Auto-Detect",
+            "auto": true
+        },
+        "2d": {
+            "label": "2D Graphics",
+            "workflow": "animation",
+            "_note": "No generative variant for animation yet -- the checkbox makes no difference here.",
+            "generative_workflow": "animation"
+        },
+        "3d": {
+            "label": "3D Graphics",
+            "workflow": "film",
+            "generative_workflow": "film_generative"
+        },
+        "live_action": {
+            "label": "Live Action",
+            "workflow": "film",
+            "generative_workflow": "film_generative"
+        },
+        "mixed": {
+            "label": "Mixed",
+            "workflow": "film",
+            "generative_workflow": "film_generative"
+        }
+    },
+    "default": "auto",
+    "_note_auto_fallback": "Concrete type an Auto-Detect job is created with, and keeps if detection fails outright: Mixed (Film workflow) handles both live action and animation acceptably.",
+    "auto_fallback": "mixed"
 }
