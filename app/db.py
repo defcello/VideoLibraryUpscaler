@@ -30,6 +30,10 @@ STAGES = [
     "finalized",
 ]
 TERMINAL_STATES = {"finalized", "failed", "needs_review", "cancelled"}
+# Optional per-job routing/naming set by the Library tab (see library.py);
+# create_job() accepts each as a keyword and the rerun endpoint copies them.
+WORKFLOW_COLUMNS = ("workflow_name", "workflow_tag", "temp_dir", "milestone_dir", "output_dir",
+                    "output_name_template", "predicted_output")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -63,6 +67,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     progress_started_at      REAL,                             -- when this run of the running stage began, for ETA rate
     queue_order              INTEGER,                          -- manual position among not-yet-'done' jobs (see reorder_job); irrelevant once status='done'
     completed_at             REAL,                             -- set once, alongside status='done' (see finalize.py); NULL until then
+    workflow_name            TEXT,                             -- Library workflow the job was queued with (NULL for pre-workflow jobs)
+    workflow_tag             TEXT,                             -- that workflow's ${workflow-tag}; part of "already processed" matching
+    temp_dir                 TEXT,                             -- preferred staging root (falls back to config staging_drives when full); NULL = config only
+    milestone_dir            TEXT,                             -- checkpoint root for generative segments; NULL = config checkpoint_root
+    output_dir               TEXT,                             -- delivery folder; NULL = the source's own folder
+    output_name_template     TEXT,                             -- final filename with only ${output-vresmode} left to fill (library.expand); NULL = legacy naming.py tags
+    predicted_output         TEXT,                             -- Library's predicted final path, for conflict checks against queued jobs
     created_at             REAL NOT NULL,
     updated_at              REAL NOT NULL
 );
@@ -165,6 +176,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # existed -- updated_at is untouched after finalize.py's terminal
         # update, so it's a reasonable stand-in for the real completion time.
         conn.execute("UPDATE jobs SET completed_at = updated_at WHERE status = 'done' AND completed_at IS NULL")
+    for col in WORKFLOW_COLUMNS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
 
 
 def create_job(
@@ -182,7 +196,11 @@ def create_job(
     crop_end_seconds: Optional[float] = None,
     content_type: Optional[str] = None,
     allow_generative: bool = False,
+    **workflow: Optional[str],
 ) -> str:
+    unknown = set(workflow) - set(WORKFLOW_COLUMNS)
+    if unknown:
+        raise TypeError(f"unknown job field(s): {sorted(unknown)}")
     job_id = uuid.uuid4().hex[:12]
     now = time.time()
     with get_conn() as conn:
@@ -193,20 +211,20 @@ def create_job(
             "SELECT COALESCE(MAX(queue_order), -1) + 1 FROM jobs WHERE status != 'done'"
         ).fetchone()[0]
         conn.execute(
-            """INSERT INTO jobs (
+            f"""INSERT INTO jobs (
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
                 deinterlace_enabled, denoise_enabled, denoise_tune, deblur_enabled, dehalo_enabled,
                 topaz_preset, content_type, allow_generative, skip_upscale,
                 crop_start_seconds, crop_end_seconds, queue_order,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                created_at, updated_at, {", ".join(WORKFLOW_COLUMNS)}
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{{}}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{", ?" * len(WORKFLOW_COLUMNS)})""",
             (
                 job_id, original_nas_path, original_filename, working_name,
                 int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(deblur_enabled), int(dehalo_enabled),
                 topaz_preset, content_type, int(allow_generative), int(skip_upscale),
                 crop_start_seconds, crop_end_seconds, next_order,
-                now, now,
+                now, now, *(workflow.get(c) for c in WORKFLOW_COLUMNS),
             ),
         )
     return job_id

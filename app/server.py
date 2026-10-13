@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, procutil, worker
+from . import db, library, procutil, worker
 from .config import CONFIG, STATIC_DIR, list_presets, load_preset, resolve_workflow
 from .topaz_models import available_scales, describe_upscale_strategy
 
@@ -231,6 +231,7 @@ def api_rerun_job(job_id: str):
         skip_upscale=bool(row["skip_upscale"]),
         crop_start_seconds=row["crop_start_seconds"],
         crop_end_seconds=row["crop_end_seconds"],
+        **{c: row[c] for c in db.WORKFLOW_COLUMNS},
     )
     return {"created": new_job_id}
 
@@ -301,6 +302,196 @@ def api_browse(path: Optional[str] = None):
         raise HTTPException(403, f"permission denied: {target}")
     parent = str(target.parent) if target.parent != target else None
     return {"path": str(target), "parent": parent, "entries": entries}
+
+
+# ------------------------------------------------------------------ library
+
+class RootsRequest(BaseModel):
+    roots: list[str]
+
+
+class WorkflowRequest(BaseModel):
+    workflow: dict                     # full field set as currently shown in the form
+    workflow_dir: str                  # value of ${dir-workflow}
+    workflow_name: Optional[str] = None
+
+
+class LibraryPathsRequest(WorkflowRequest):
+    paths: list[str]
+
+
+class WorkflowEditRequest(BaseModel):
+    dir: str
+    action: str                        # "save" | "rename" | "delete"
+    name: str
+    new_name: Optional[str] = None
+    fields: Optional[dict] = None
+
+
+def _library_dir(path: Optional[str]) -> Path:
+    target = Path(path) if path else Path(library.get_roots()[0])
+    if not target.is_dir():
+        raise HTTPException(400, f"not a directory: {target}")
+    return target
+
+
+def _settings_payload(target: Path) -> dict:
+    try:
+        local = library.read_local(target)
+        resolved = library.resolve(target)
+    except library.SettingsError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "dir": str(target),
+        "file": str(target / library.SETTINGS_NAME),
+        "file_exists": local is not None,
+        "local": local or {},
+        "defaults": library.app_default_workflow(),
+        "workflow_fields": list(library.WORKFLOW_FIELDS),
+        **resolved,
+    }
+
+
+@app.get("/api/library/roots")
+def api_library_roots():
+    return {"roots": library.get_roots()}
+
+
+@app.put("/api/library/roots")
+def api_library_set_roots(req: RootsRequest):
+    if not req.roots:
+        raise HTTPException(400, "at least one root is required")
+    return {"roots": library.set_roots(req.roots)}
+
+
+@app.get("/api/library/browse")
+def api_library_browse(path: Optional[str] = None):
+    target = _library_dir(path)
+    try:
+        dirs = library.list_dirs(str(target))
+    except PermissionError:
+        raise HTTPException(403, f"permission denied: {target}")
+    parent = str(target.parent) if target.parent != target else None
+    return {"path": str(target), "parent": parent, "dirs": dirs, "root": library.root_for(target),
+            "has_settings": (target / library.SETTINGS_NAME).exists()}
+
+
+@app.get("/api/library/files")
+def api_library_files(path: str, recursive: bool = False):
+    target = _library_dir(path)
+    files, truncated = library.list_files(str(target), recursive)
+    return {"path": str(target), "files": files, "truncated": truncated}
+
+
+@app.get("/api/library/settings")
+def api_library_settings(path: str):
+    return _settings_payload(_library_dir(path))
+
+
+@app.put("/api/library/settings")
+def api_library_write_settings(path: str, body: dict):
+    target = _library_dir(path)
+    try:
+        library.write_local(target, body)
+    except library.SettingsError as e:
+        raise HTTPException(400, str(e))
+    return _settings_payload(target)
+
+
+@app.post("/api/library/workflow")
+def api_library_workflow(req: WorkflowEditRequest):
+    target = _library_dir(req.dir)
+    try:
+        if req.action == "save":
+            library.save_workflow(str(target), req.name, req.fields or {})
+        elif req.action == "rename":
+            library.rename_workflow(str(target), req.name, req.new_name or "")
+        elif req.action == "delete":
+            library.delete_workflow(str(target), req.name)
+        else:
+            raise HTTPException(400, f"unknown action: {req.action}")
+    except library.SettingsError as e:
+        raise HTTPException(400, str(e))
+    return _settings_payload(target)
+
+
+@app.post("/api/library/status")
+def api_library_status(req: LibraryPathsRequest):
+    return library.completion_status(req.paths, req.workflow, req.workflow_dir)
+
+
+@app.post("/api/library/preview")
+def api_library_preview(req: LibraryPathsRequest):
+    plans = library.plan_outputs(req.paths, {**req.workflow, "name": req.workflow_name or ""}, req.workflow_dir)
+    library.find_conflicts(plans)
+    return plans
+
+
+def _parse_timecode(text) -> Optional[float]:
+    """'HH:MM:SS', 'MM:SS' or bare seconds -> seconds; blank -> None."""
+    text = str(text or "").strip()
+    if not text:
+        return None
+    try:
+        parts = [float(p) for p in text.split(":")]
+    except ValueError:
+        raise ValueError(f"invalid timecode: {text!r}")
+    if len(parts) > 3:
+        raise ValueError(f"invalid timecode: {text!r}")
+    total = 0.0
+    for p in parts:
+        total = total * 60 + p
+    return total
+
+
+@app.post("/api/library/queue")
+def api_library_queue(req: LibraryPathsRequest):
+    wf = {**library.app_default_workflow(), **req.workflow, "name": req.workflow_name or ""}
+    try:
+        resolved = resolve_workflow(wf["content_type"], bool(wf["allow_generative"]))
+    except KeyError:
+        raise HTTPException(400, f"unknown content_type: {wf['content_type']}")
+    crop_start = crop_end = None
+    if wf.get("crop_enabled"):
+        try:
+            crop_start, crop_end = _parse_timecode(wf.get("crop_start")), _parse_timecode(wf.get("crop_end"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if crop_start is None or crop_end is None or crop_end <= crop_start:
+            raise HTTPException(400, "crop needs both In and Out points, with Out after In")
+    plans = library.plan_outputs(req.paths, wf, req.workflow_dir)
+    for plan in plans:
+        if plan.get("error"):
+            raise HTTPException(400, f"{plan['source']}: {plan['error']}")
+        if not Path(plan["source"]).exists():
+            raise HTTPException(400, f"path not found: {plan['source']}")
+    created = []
+    for plan in plans:
+        src = Path(plan["source"])
+        created.append(db.create_job(
+            original_nas_path=str(src),
+            original_filename=src.name,
+            working_name="",
+            deinterlace_enabled=bool(wf["deinterlace_enabled"]),
+            denoise_enabled=bool(wf["denoise_enabled"]),
+            deblur_enabled=bool(wf["deblur_enabled"]),
+            dehalo_enabled=bool(wf["dehalo_enabled"]),
+            denoise_tune=resolved["denoise_tune"],
+            topaz_preset=resolved["topaz_preset"],
+            content_type=wf["content_type"],
+            allow_generative=bool(wf["allow_generative"]),
+            skip_upscale=not wf["upscale_enabled"],
+            crop_start_seconds=crop_start,
+            crop_end_seconds=crop_end,
+            workflow_name=wf["name"] or None,
+            workflow_tag=wf.get("workflow_tag") or "",
+            temp_dir=plan["temp_dir"],
+            milestone_dir=plan["milestone_dir"],
+            output_dir=plan["output_dir"],
+            output_name_template=plan["name_template"],
+            predicted_output=plan["output_path"],
+        ))
+    return {"created": created}
 
 
 # ------------------------------------------------------------------ presets

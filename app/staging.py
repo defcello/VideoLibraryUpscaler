@@ -36,6 +36,8 @@ def cleanup(job_id: str) -> None:
         directory = Path(job["staging_dir"]).resolve()
         roots = [(Path(drive) / CONFIG["staging_subdir"]).resolve()
                  for drive in CONFIG["staging_drives"]]
+        if dict(job).get("temp_dir"):
+            roots.append(Path(dict(job)["temp_dir"]).resolve())
         if directory.name != job_id or directory.parent not in roots:
             raise ValueError(f"refusing cleanup outside configured job staging directories: {directory}")
         if not directory.exists():

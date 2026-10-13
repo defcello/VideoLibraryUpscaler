@@ -9,56 +9,213 @@
 
 <header>
     <h1>AI Remaster Pipeline</h1>
+    <nav class="tabs">
+        <button class="tab active" data-tab="library">Library</button>
+        <button class="tab" data-tab="queue">Queue <span class="tab-count" id="queue-count"></span></button>
+    </nav>
     <span class="sub" id="worker-status">worker: idle</span>
 </header>
 
-<main>
-    <section class="panel">
-        <h2>Submit</h2>
-        <div class="browse-path" id="browse-path">loading...</div>
-        <div class="browse-list" id="browse-list"></div>
+<!-- ============================================================ Library -->
+<main id="tab-library" class="library">
 
-        <div class="field">
-            <label>Selected files</label>
-            <div id="selected-count" style="font-size:13px;color:var(--text-dim)">none selected</div>
+    <!-- Column 1: directory browser -->
+    <section class="lib-pane lib-browser">
+        <h2>Browse</h2>
+        <form id="lib-path-form" class="path-row">
+            <input type="text" id="lib-path" spellcheck="false" placeholder="Path">
+            <button type="submit" class="small">Go</button>
+        </form>
+        <div class="root-buttons">
+            <button class="small" id="lib-add-root" disabled>Add as Root</button>
+            <button class="small" id="lib-remove-root" disabled>Remove Root</button>
         </div>
+        <div class="lib-subhead">Roots</div>
+        <div class="lib-list" id="lib-roots"></div>
+        <div class="lib-subhead">Folders</div>
+        <div class="lib-list lib-dirs" id="lib-dirs"></div>
+    </section>
 
-        <div class="field">
-            <label class="checkbox"><input type="checkbox" id="test-crop-enabled"> Test crop (In/Out points)</label>
-            <div id="test-crop-inputs" hidden style="margin-top:6px;display:flex;gap:8px">
-                <input type="text" id="test-crop-start" placeholder="In (HH:MM:SS)" style="width:120px">
-                <input type="text" id="test-crop-end" placeholder="Out (HH:MM:SS)" style="width:120px">
+    <!-- Column 2: file list -->
+    <section class="lib-pane lib-files">
+        <h2>Files</h2>
+        <div class="file-head">
+            <label class="checkbox"><input type="checkbox" id="lib-select-all"> <span id="lib-select-count">Select all</span></label>
+        </div>
+        <div class="lib-list file-list" id="lib-files"></div>
+        <div class="file-filters">
+            <div class="field">
+                <label for="show-regex">Show files (regex)</label>
+                <input type="text" id="show-regex" spellcheck="false" data-wf="show_regex">
             </div>
-        </div>
-        <div class="field toggle-stack">
-            <label class="checkbox"><input type="checkbox" id="deinterlace-enabled"> Normalize to Progressive</label>
-            <label class="checkbox"><input type="checkbox" id="denoise-enabled"> Remove Noise/Grain</label>
-            <label class="checkbox"><input type="checkbox" id="deblur-enabled"> Remove Blur</label>
-            <label class="checkbox"><input type="checkbox" id="dehalo-enabled"> Remove Halo</label>
-            <label class="checkbox"><input type="checkbox" id="upscale-enabled"> Upscale to 1080p</label>
-        </div>
-        <div class="field">
-            <label>Content type</label>
-            <div class="preset-row">
-                <select id="content-type" style="flex:1"></select>
-                <button class="small" id="preset-toggle" title="Show Processing Stack">&#9654;</button>
+            <div class="field">
+                <label for="hide-regex">Hide files (regex)</label>
+                <input type="text" id="hide-regex" spellcheck="false" data-wf="hide_regex">
             </div>
-            <label class="checkbox" style="margin-top:6px" title="Uses Topaz's generative (Starlight) upscale for Live Action, 3D Graphics and Mixed content -- far slower. No effect on 2D Graphics yet."><input type="checkbox" id="allow-generative"> Allow Generative Tools</label>
-            <div class="stack-panel" id="preset-details" hidden></div>
-        </div>
-
-        <div class="field">
-            <button class="primary" id="submit-btn">Add to queue</button>
-        </div>
-        <div class="field">
-            <button class="small" id="pause-btn" title="Finishes the current checkpoint segment, then freezes the whole queue -- lets you free the GPU for gaming/editing without losing in-progress generative-upscale work">Pause at next checkpoint</button>
-            <button class="small" id="resume-btn" disabled>Resume processing</button>
-        </div>
-        <div class="field">
-            <button class="small" id="delete-done-btn" title="Removes every finished job from the queue list (output files are untouched -- they already live at their destination)">Delete done jobs</button>
+            <label class="checkbox"><input type="checkbox" id="include-subdirs" data-wf="include_subdirs"> Include files from subdirectories</label>
+            <label class="checkbox"><input type="checkbox" id="show-all" data-wf="show_all"> Show all files</label>
+            <label class="checkbox"><input type="checkbox" id="show-hidden" data-wf="show_hidden"> Show hidden files</label>
+            <div class="legend">
+                <span class="st-none">not processed</span>
+                <span class="st-pending">queued</span>
+                <span class="st-running">processing</span>
+                <span class="st-done">done</span>
+                <span class="st-failed">failed</span>
+            </div>
         </div>
     </section>
 
+    <!-- Column 3: create job / edit settings -->
+    <section class="lib-pane lib-config">
+        <div id="create-job-mode">
+            <h2>Create Job</h2>
+            <div class="field">
+                <label for="wf-select">Workflow</label>
+                <select id="wf-select" class="wf-select"></select>
+                <div class="wf-note" id="wf-note"></div>
+            </div>
+
+            <details class="wf-edit" id="wf-edit">
+                <summary>Edit Workflow</summary>
+                <div class="inline-row">
+                    <input type="text" id="wf-rename-input" placeholder="New name">
+                    <button class="small" id="wf-rename-btn">Rename</button>
+                    <button class="small danger" id="wf-delete-btn">Delete</button>
+                </div>
+                <div class="inline-row">
+                    <input type="text" id="wf-saveas-input" placeholder="New workflow name">
+                    <button class="small" id="wf-saveas-btn">Save As New</button>
+                </div>
+                <div class="inline-row">
+                    <button class="small primary" id="wf-save-btn">Save Changes</button>
+                    <span class="wf-note" id="wf-save-note"></span>
+                </div>
+            </details>
+
+            <div class="field">
+                <label for="temp-dir">Temp directory</label>
+                <input type="text" id="temp-dir" spellcheck="false" data-wf="temp_dir">
+            </div>
+            <div class="field">
+                <label for="milestone-dir">Milestone directory <span class="hint">(generative checkpoints)</span></label>
+                <input type="text" id="milestone-dir" spellcheck="false" data-wf="milestone_dir">
+            </div>
+            <div class="field">
+                <label for="output-dir">Output directory</label>
+                <div class="inline-row">
+                    <input type="text" id="output-dir" spellcheck="false" data-wf="output_dir">
+                    <select class="insert-select" data-target="output-dir" data-kind="dir" title="Insert a variable"></select>
+                </div>
+            </div>
+            <div class="field">
+                <label for="base-regex">Base filename (regex) <button class="info-btn" data-info="info-base">i</button></label>
+                <input type="text" id="base-regex" spellcheck="false" data-wf="base_regex">
+                <div class="info-box" id="info-base" hidden>
+                    Matched against the source filename. Each <code>( )</code> group can be referenced in the
+                    target filename as <code>$1</code>, <code>$2</code>, ... — anything not inside a group is
+                    dropped. The default <code>^(.*)\.[^\.]+$</code> captures everything except the extension.
+                    Example: <code>^(.*) \[Original\](.*)\.[^.]+$</code> on
+                    <code>Ep [Original] [TUKTC].mkv</code> gives <code>$1</code>=<code>Ep</code>,
+                    <code>$2</code>=<code> [TUKTC]</code>.
+                </div>
+            </div>
+            <div class="field">
+                <label for="target-format">Target filename <button class="info-btn" data-info="info-target">i</button></label>
+                <div class="inline-row">
+                    <input type="text" id="target-format" spellcheck="false" data-wf="target_format">
+                    <select class="insert-select" data-target="target-format" data-kind="name" title="Insert a format string"></select>
+                </div>
+                <div class="info-box" id="info-target" hidden>
+                    <code>$1</code>..<code>$9</code> base-filename groups · <code>${workflow-tag}</code> ·
+                    <code>${output-vresmode}</code> output resolution + scan, e.g. <code>1080p</code> (predicted in
+                    previews; measured from the finished file) · <code>${ext}</code> output extension
+                    (always <code>.mkv</code> — MP4 drops the processing metadata) · <code>${source-ext}</code> ·
+                    <code>${workflow-name}</code> · escapes <code>$$</code> → $, <code>${lb}</code> → {,
+                    <code>${rb}</code> → }.
+                </div>
+            </div>
+            <div class="field">
+                <label for="workflow-tag">${workflow-tag}</label>
+                <input type="text" id="workflow-tag" spellcheck="false" data-wf="workflow_tag">
+            </div>
+
+            <div class="field">
+                <label class="checkbox"><input type="checkbox" id="test-crop-enabled" data-wf="crop_enabled"> Crop (In/Out)</label>
+                <div id="test-crop-inputs" hidden class="inline-row" style="margin-top:6px">
+                    <input type="text" id="test-crop-start" placeholder="In (HH:MM:SS)" data-wf="crop_start">
+                    <input type="text" id="test-crop-end" placeholder="Out (HH:MM:SS)" data-wf="crop_end">
+                </div>
+            </div>
+            <div class="field toggle-stack">
+                <label class="checkbox"><input type="checkbox" id="deinterlace-enabled" data-wf="deinterlace_enabled"> Normalize to Progressive</label>
+                <label class="checkbox"><input type="checkbox" id="denoise-enabled" data-wf="denoise_enabled"> Remove Noise/Grain</label>
+                <label class="checkbox"><input type="checkbox" id="deblur-enabled" data-wf="deblur_enabled"> Remove Blur</label>
+                <label class="checkbox"><input type="checkbox" id="dehalo-enabled" data-wf="dehalo_enabled"> Remove Halo</label>
+                <label class="checkbox"><input type="checkbox" id="upscale-enabled" data-wf="upscale_enabled"> Upscale to 1080p</label>
+            </div>
+            <div class="field">
+                <label class="checkbox" title="Uses Topaz's generative (Starlight) upscale for Live Action, 3D Graphics and Mixed content -- far slower. No effect on 2D Graphics yet."><input type="checkbox" id="allow-generative" data-wf="allow_generative"> Allow Generative Tools</label>
+            </div>
+            <div class="field">
+                <label>Content type</label>
+                <div class="preset-row">
+                    <select id="content-type" style="flex:1" data-wf="content_type"></select>
+                    <button class="small" id="preset-toggle" title="Show Processing Stack">&#9654;</button>
+                </div>
+                <div class="stack-panel" id="preset-details" hidden></div>
+            </div>
+        </div>
+
+        <div id="edit-settings-mode" hidden>
+            <h2>Edit Settings</h2>
+            <div class="settings-path" id="es-path"></div>
+            <div class="field">
+                <label class="checkbox"><input type="checkbox" id="es-ignore-parent"> Ignore parent settings</label>
+                <div class="hint">Stops inheritance here: this directory starts from the app defaults.</div>
+            </div>
+            <div class="field">
+                <label for="es-default-wf">Default workflow for this directory</label>
+                <select id="es-default-wf"></select>
+            </div>
+            <div class="field">
+                <label>Workflow definitions</label>
+                <div class="hint">Only the fields set here override what's inherited. Unlisted fields come from the
+                    parent directory's workflow of the same name (or from <em>Custom</em> for a new name).</div>
+                <div id="es-workflows"></div>
+                <div class="inline-row" style="margin-top:8px">
+                    <input type="text" id="es-new-name" placeholder="Workflow name">
+                    <button class="small" id="es-add-wf" title="Adds a definition holding the Create Job form's current values">Add from form</button>
+                </div>
+            </div>
+            <div class="field">
+                <label>Inherited from parent directories</label>
+                <div id="es-inherited" class="hint"></div>
+            </div>
+            <div class="es-actions">
+                <button class="small primary" id="es-save">Save Changes</button>
+                <button class="small" id="es-revert">Revert</button>
+                <button class="small" id="es-reset">Reset to Defaults</button>
+                <button class="small" id="es-cancel">Cancel</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Column 4: predicted outputs -->
+    <section class="lib-pane lib-outputs">
+        <h2>Outputs</h2>
+        <div class="lib-list output-list" id="lib-outputs"></div>
+        <label class="checkbox" style="margin-top:8px"><input type="checkbox" id="show-full-path"> Show full file path</label>
+        <button class="primary" id="add-to-queue" style="margin-top:10px" disabled>Add to Queue</button>
+    </section>
+</main>
+
+<!-- ============================================================== Queue -->
+<main id="tab-queue" class="queue-tab" hidden>
+    <div class="queue-toolbar">
+        <button class="small" id="pause-btn" title="Finishes the current checkpoint segment, then freezes the whole queue -- lets you free the GPU for gaming/editing without losing in-progress generative-upscale work">Pause at next checkpoint</button>
+        <button class="small" id="resume-btn" disabled>Resume processing</button>
+        <button class="small" id="delete-done-btn" title="Removes every finished job from the queue list (output files are untouched -- they already live at their destination)">Delete done jobs</button>
+    </div>
     <section class="queue">
         <table>
             <thead>
@@ -74,7 +231,7 @@
             </thead>
             <tbody id="job-rows"></tbody>
         </table>
-        <div class="empty" id="empty-msg" style="display:none">No jobs yet -- browse and submit files on the left.</div>
+        <div class="empty" id="empty-msg" style="display:none">No jobs yet -- add files from the Library tab.</div>
     </section>
 </main>
 
@@ -99,5 +256,6 @@
 </div>
 
 <script src="/static/app.js"></script>
+<script src="/static/library.js"></script>
 </body>
 </html>

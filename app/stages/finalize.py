@@ -24,7 +24,7 @@ import shutil
 import time
 from pathlib import Path
 
-from .. import db, staging
+from .. import db, library, staging
 from ..config import CONFIG
 from ..decoder_util import cuvid_decoder_args
 from ..metadata_tags import ffmpeg_metadata_args, processed_date
@@ -63,6 +63,13 @@ def _unique_destination(dest: Path) -> Path:
         n += 1
 
 
+def _vresmode(job, settings: dict, current: Path) -> str:
+    """'1080p' / '480i' style ${output-vresmode} for the finished file."""
+    height = library.probe_media(str(current)).get("height") or settings.get("upscaled_height") or settings.get("height") or 0
+    progressive = job["deinterlace_enabled"] or settings.get("scan_type") == "progressive"
+    return f"{height}{'p' if progressive else 'i'}"
+
+
 def run(job_id: str) -> None:
     job = db.get_job(job_id)
     settings = db.get_settings(job_id)
@@ -85,10 +92,20 @@ def run(job_id: str) -> None:
     # Always deliver as .mkv regardless of the source's own container or
     # whatever extension the last stage happened to leave the file in.
     final_name = str(Path(final_name).with_suffix(".mkv"))
+    if job["output_name_template"]:
+        # Library-queued job: its workflow's target filename, with the real
+        # output resolution measured off the finished file.
+        final_name = library.final_name(job["output_name_template"], _vresmode(job, settings, current))
 
     meta = {
         "TOOL": "AI Remaster Pipeline",
         "SOURCE_FILE": job["original_filename"],
+        "SOURCE_PATH": job["original_nas_path"],
+        # Read back by library.completion_status to recognize this file as the
+        # output of a given workflow (stage set + tag) for SOURCE_FILE.
+        "WORKFLOW": job["workflow_name"],
+        "WORKFLOW_TAG": job["workflow_tag"],
+        "WORKFLOW_STAGES": ",".join(library.job_stages(job)),
         "SCAN_DETECTION": _scan_summary(settings),
         "CONTENT_TYPE": _content_summary(job, settings),
         "DEINTERLACE": settings.get("deinterlace_summary", "skipped"),
@@ -111,7 +128,7 @@ def run(job_id: str) -> None:
     if not remuxed.exists() or remuxed.stat().st_size == 0:
         raise RuntimeError("finalize metadata remux produced no output file")
 
-    dest_dir = Path(job["original_nas_path"]).parent
+    dest_dir = Path(job["output_dir"] or Path(job["original_nas_path"]).parent)
     dest_path = _unique_destination(dest_dir / final_name)
 
     db.log(job_id, STAGE, f"moving {remuxed} -> {dest_path}")

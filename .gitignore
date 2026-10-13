@@ -7,3 +7,4 @@ staging/
 logs/
 .venv/
 pipeline.db-shm
+library.json

@@ -19,7 +19,7 @@ from typing import Callable
 
 from .. import db
 from ..config import CONFIG, load_preset
-from ..decoder_util import cuvid_decoder_args
+from ..decoder_util import color_tag_filter, cuvid_decoder_args
 from ..procutil import ffmpeg_time_progress, run_logged
 
 FFMPEG = CONFIG["tools"]["ffmpeg"]
@@ -87,7 +87,7 @@ def run_cleanup(
     width, height = _current_dims(src)
 
     passes = resolve_passes(preset, height)
-    filters = []
+    filters = [color_tag_filter(src, height)]
     for p in passes:
         params = {"model": p["model"], **p["params"]}
         # scale=0 is the captured command line's way of saying "no AI scale

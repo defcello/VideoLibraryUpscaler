@@ -2,8 +2,6 @@ const STAGES = ["queued", "staged", "probed", "deinterlaced", "denoised", "deblu
 
 const TRASH_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>`;
 
-let browsePath = null;
-let selected = new Set();
 let presets = null;
 let jobsById = {};
 let lastRenderedJobs = [];
@@ -25,54 +23,6 @@ async function api(path, opts) {
     return res.status === 204 ? null : res.json();
 }
 
-// ----------------------------------------------------------------- browsing
-
-async function loadBrowse(path) {
-    const data = await api("/api/browse" + (path ? `?path=${encodeURIComponent(path)}` : ""));
-    browsePath = data.path;
-    document.getElementById("browse-path").textContent = data.path;
-    const list = document.getElementById("browse-list");
-    list.innerHTML = "";
-
-    if (data.parent) {
-        const up = document.createElement("div");
-        up.className = "browse-entry dir";
-        up.textContent = ".. (up)";
-        up.onclick = () => loadBrowse(data.parent);
-        list.appendChild(up);
-    }
-
-    for (const entry of data.entries) {
-        const row = document.createElement("div");
-        row.className = "browse-entry" + (entry.is_dir ? " dir" : "");
-        if (entry.is_dir) {
-            row.textContent = "\u{1F4C1} " + entry.name;
-            row.onclick = () => loadBrowse(entry.path);
-        } else {
-            const cb = document.createElement("input");
-            cb.type = "checkbox";
-            cb.checked = selected.has(entry.path);
-            cb.onclick = (e) => {
-                e.stopPropagation();
-                toggleSelect(entry.path);
-            };
-            const label = document.createElement("span");
-            label.textContent = entry.name;
-            row.appendChild(cb);
-            row.appendChild(label);
-            row.onclick = () => toggleSelect(entry.path);
-        }
-        list.appendChild(row);
-    }
-}
-
-function toggleSelect(path) {
-    if (selected.has(path)) selected.delete(path); else selected.add(path);
-    document.getElementById("selected-count").textContent =
-        selected.size ? `${selected.size} file(s) selected` : "none selected";
-    loadBrowse(browsePath);
-}
-
 // ------------------------------------------------------------------ presets
 
 async function loadPresets() {
@@ -86,6 +36,7 @@ async function loadPresets() {
         typeSel.appendChild(opt);
     }
     renderPresetDetails();
+    return presets;
 }
 
 // Which workflow(s) a submission would use: just one for a concrete content
@@ -197,98 +148,10 @@ function togglePresetDetails() {
     if (!panel.hidden) renderPresetDetails();
 }
 
-// Parses "HH:MM:SS", "MM:SS", or a bare seconds value into total seconds.
-// Returns null for blank input, throws for anything else unparseable.
-function parseTimecode(text) {
-    text = (text || "").trim();
-    if (!text) return null;
-    const parts = text.split(":").map(p => p.trim());
-    if (parts.some(p => p === "" || isNaN(Number(p)))) {
-        throw new Error(`Invalid timecode: "${text}"`);
-    }
-    const nums = parts.map(Number);
-    if (nums.length === 1) return nums[0];
-    if (nums.length === 2) return nums[0] * 60 + nums[1];
-    if (nums.length === 3) return nums[0] * 3600 + nums[1] * 60 + nums[2];
-    throw new Error(`Invalid timecode: "${text}"`);
-}
-
-function getCropRange() {
-    if (!document.getElementById("test-crop-enabled").checked) return { start: null, end: null };
-    const start = parseTimecode(document.getElementById("test-crop-start").value);
-    const end = parseTimecode(document.getElementById("test-crop-end").value);
-    if (start === null || end === null) throw new Error("Enter both an In and an Out point for the test crop.");
-    if (end <= start) throw new Error("Test crop Out point must be after the In point.");
-    return { start, end };
-}
-
-async function submitJobs() {
-    if (selected.size === 0) { alert("Select at least one file first."); return; }
-    let crop;
-    try {
-        crop = getCropRange();
-    } catch (e) {
-        alert(e.message);
-        return;
-    }
-    try {
-        await api("/api/jobs", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                paths: Array.from(selected),
-                deinterlace_enabled: document.getElementById("deinterlace-enabled").checked,
-                denoise_enabled: document.getElementById("denoise-enabled").checked,
-                deblur_enabled: document.getElementById("deblur-enabled").checked,
-                dehalo_enabled: document.getElementById("dehalo-enabled").checked,
-                content_type: document.getElementById("content-type").value,
-                allow_generative: document.getElementById("allow-generative").checked,
-                // The API's "skip_upscale" field predates the toggle stack and is
-                // kept internally (server/db) to avoid a schema rename -- the UI
-                // now shows its inverse as an "Upscale" toggle.
-                skip_upscale: !document.getElementById("upscale-enabled").checked,
-                crop_start_seconds: crop.start,
-                crop_end_seconds: crop.end,
-            }),
-        });
-    } catch (e) {
-        alert("Couldn't add to queue: " + e.message);
-        return;
-    }
-    selected.clear();
-    document.getElementById("selected-count").textContent = "none selected";
-    loadBrowse(browsePath);
-}
-
 function initTestCropToggle() {
     const cb = document.getElementById("test-crop-enabled");
     const inputs = document.getElementById("test-crop-inputs");
-    cb.onchange = () => { inputs.hidden = !cb.checked; };
-}
-
-// Each toggle in the processing stack remembers its last state across
-// sessions (per-viewer convenience, not something the server needs to
-// track) -- id -> [localStorage key, default checked state].
-const TOGGLE_STACK = {
-    "deinterlace-enabled": ["deinterlaceEnabled", true],
-    "denoise-enabled": ["denoiseEnabled", false],
-    "deblur-enabled": ["deblurEnabled", false],
-    "dehalo-enabled": ["dehaloEnabled", false],
-    "upscale-enabled": ["upscaleEnabled", true],
-};
-
-function initToggleStack() {
-    for (const [id, [key, defaultChecked]] of Object.entries(TOGGLE_STACK)) {
-        const cb = document.getElementById(id);
-        try {
-            const stored = localStorage.getItem(key);
-            cb.checked = stored === null ? defaultChecked : stored === "true";
-        } catch (e) { cb.checked = defaultChecked; /* private browsing etc */ }
-        cb.onchange = () => {
-            try { localStorage.setItem(key, cb.checked); } catch (e) { /* ignore */ }
-            if (!document.getElementById("preset-details").hidden) renderPresetDetails();
-        };
-    }
+    cb.addEventListener("change", () => { inputs.hidden = !cb.checked; });
 }
 
 // --------------------------------------------------------------- job table
@@ -342,14 +205,24 @@ function stageTrack(job) {
 // started are excluded from the rate); stages without frame counts
 // (HandBrake) fall back to the same math on percent.
 function runningStats(job) {
-    const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
+    const { pct, framesText, etaText } = runningEta(job);
     const parts = [`running ${pct.toFixed(0)}%`];
+    if (framesText) parts.push(framesText);
+    if (etaText) parts.push(`ETA ${etaText}`);
+    return parts.join("; ");
+}
+
+// Shared by the queue's stage list and the Library's file-list progress
+// marker: {pct, framesText, etaText} for the running stage.
+function runningEta(job) {
+    const pct = Math.max(0, Math.min(100, job.progress_percent ?? 0));
+    let framesText = null, etaText = null;
     const now = Date.now() / 1000;
     const elapsed = job.progress_started_at ? now - job.progress_started_at : 0;
     let remainingSecs = null;
     if (job.progress_frames != null && job.progress_total_frames) {
         const fmt = n => n.toLocaleString();
-        parts.push(`${fmt(job.progress_frames)} of ${fmt(job.progress_total_frames)} frames`);
+        framesText = `${fmt(job.progress_frames)} of ${fmt(job.progress_total_frames)} frames`;
         const doneThisRun = job.progress_frames - (job.progress_start_frames ?? 0);
         if (doneThisRun > 0 && elapsed > 0) {
             remainingSecs = (job.progress_total_frames - job.progress_frames) * (elapsed / doneThisRun);
@@ -361,9 +234,9 @@ function runningStats(job) {
         const eta = new Date((now + remainingSecs) * 1000);
         const sameDay = eta.toDateString() === new Date().toDateString();
         const time = eta.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        parts.push(`ETA ${sameDay ? time : eta.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + time}`);
+        etaText = sameDay ? time : eta.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + time;
     }
-    return parts.join("; ");
+    return { pct, framesText, etaText };
 }
 
 function statusLabel(job) {
@@ -834,6 +707,9 @@ function connectStream() {
     es.onmessage = (ev) => {
         const data = JSON.parse(ev.data);
         renderJobs(data.jobs);
+        const active = data.jobs.filter(j => j.status !== "done" && j.status !== "cancelled").length;
+        document.getElementById("queue-count").textContent = active ? `(${active})` : "";
+        if (window.libraryOnJobs) window.libraryOnJobs(data.jobs);
         document.getElementById("worker-status").textContent =
             data.current_job_id ? `worker: running ${data.current_job_id}` : "worker: idle";
         renderPauseControls(data.worker_pause_state || "running");
@@ -844,21 +720,26 @@ function connectStream() {
     };
 }
 
+// -------------------------------------------------------------------- tabs
+
+function showTab(name) {
+    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+    document.getElementById("tab-library").hidden = name !== "library";
+    document.getElementById("tab-queue").hidden = name !== "queue";
+    try { localStorage.setItem("activeTab", name); } catch (e) { /* ignore */ }
+}
+
 // -------------------------------------------------------------------- init
 
-document.getElementById("submit-btn").onclick = submitJobs;
+document.querySelectorAll(".tab").forEach(t => { t.onclick = () => showTab(t.dataset.tab); });
+try { showTab(localStorage.getItem("activeTab") || "library"); } catch (e) { showTab("library"); }
 document.getElementById("pause-btn").onclick = pauseWorker;
 document.getElementById("resume-btn").onclick = resumeWorker;
 document.getElementById("delete-done-btn").onclick = deleteDoneJobs;
 document.getElementById("detail-close").onclick = closeDetail;
 document.getElementById("preset-toggle").onclick = togglePresetDetails;
-document.getElementById("content-type").onchange =
-document.getElementById("allow-generative").onchange = () => {
-    if (!document.getElementById("preset-details").hidden) renderPresetDetails();
-};
 
-initToggleStack();
 initTestCropToggle();
-loadPresets();
-loadBrowse(null);
+// library.js chains off this to build its workflow form once content types are known.
+const presetsReady = loadPresets();
 connectStream();

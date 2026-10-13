@@ -37,6 +37,28 @@ def _pick_staging_drive(required_bytes: int) -> str:
                        "and safety margin; FAT/FAT32 volumes are excluded. Check staging drives.")
 
 
+def _preferred_temp_dir(job_id: str, temp_dir: str | None, required_bytes: int) -> Path | None:
+    """The job's workflow temp directory when it has room (same margin and
+    FAT check as the configured drives); None falls back to config's
+    staging_drives -- a workflow pointing big movies at a roomier drive
+    shouldn't fail outright just because that drive is momentarily full."""
+    if not temp_dir:
+        return None
+    root = Path(temp_dir)
+    margin = CONFIG["staging_free_space_margin_gb"] * (1024 ** 3)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        staging.check_filesystem(root)
+        if shutil.disk_usage(root).free - required_bytes > margin:
+            return root
+        reason = "not enough free space"
+    except (OSError, RuntimeError) as e:
+        reason = str(e)
+    db.log(job_id, STAGE, f"WARNING: workflow temp dir {root} unusable ({reason}) -- "
+                          "falling back to configured staging drives")
+    return None
+
+
 def _apply_test_crop(job_id: str, staged_file: Path, start_seconds: float, end_seconds: float | None) -> Path:
     """Testing aid: trims the staged copy down to an In/Out range before it
     enters the rest of the pipeline, so a slow preset (e.g. the generative
@@ -79,11 +101,16 @@ def run(job_id: str) -> None:
         return
 
     size = src.stat().st_size
-    drive = _pick_staging_drive(size)
+    staging_root = _preferred_temp_dir(job_id, job["temp_dir"], size)
+    if staging_root:
+        drive = staging_root.anchor or str(staging_root)
+    else:
+        drive = _pick_staging_drive(size)
+        staging_root = Path(drive) / CONFIG["staging_subdir"]
     if drive.rstrip("\\/").upper().startswith("R:"):
         db.log(job_id, STAGE, f"WARNING: staging on {drive} (RAM disk) -- volatile, wiped on reboot")
 
-    staging_dir = Path(drive) / CONFIG["staging_subdir"] / job_id
+    staging_dir = staging_root / job_id
     staging_dir.mkdir(parents=True, exist_ok=True)
     # Record ownership before copying, so a disk-full copy can be cleaned up.
     db.update_job(job_id, staging_drive=drive, staging_dir=str(staging_dir))

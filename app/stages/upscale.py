@@ -30,7 +30,7 @@ from typing import Optional
 
 from .. import db, naming, procutil, vram_probe
 from ..config import CONFIG, load_preset
-from ..decoder_util import cuvid_decoder_args
+from ..decoder_util import color_tag_filter, cuvid_decoder_args
 from ..procutil import CommandError, Progress, ProgressParser, ffmpeg_time_progress, run_logged
 from ..topaz_models import build_scale_passes
 
@@ -103,7 +103,7 @@ def run(job_id: str) -> None:
     db.log(job_id, STAGE, f"source {width}x{height} -> target {target_w}x{target_h} "
                           f"(model={preset['model']}, scale passes={scale_passes or 'none'}, then exact resize)")
 
-    filters = []
+    filters = [color_tag_filter(src, height)]
     if preset.get("precleanup", {}).get("enabled"):
         pc = preset["precleanup"]
         pc_params = {"model": pc["model"], "scale": 1, **pc["params"]}
@@ -440,7 +440,8 @@ def _run_generative(job_id: str, job, settings: dict, preset: dict, src: Path) -
         blackframes = _blackdetect_boundaries(job_id, src, CONFIG["checkpoint_min_spacing_seconds"])
         settings = db.merge_settings(job_id, {"checkpoint_blackframes": blackframes})
 
-    checkpoint_dir = Path(settings.get("checkpoint_dir") or str(Path(CONFIG["checkpoint_root"]) / job_id))
+    milestone_root = db.get_job(job_id)["milestone_dir"] or CONFIG["checkpoint_root"]
+    checkpoint_dir = Path(settings.get("checkpoint_dir") or str(Path(milestone_root) / job_id))
     if not settings.get("checkpoint_dir"):
         settings = db.merge_settings(job_id, {"checkpoint_dir": str(checkpoint_dir)})
 
