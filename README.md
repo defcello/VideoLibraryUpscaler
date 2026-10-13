@@ -7,9 +7,14 @@ worker thread; a plain-JS dashboard (no build step) shows live progress over SSE
 
 ![Dashboard screenshot](docs/dashboard.png)
 
-The dashboard lets you browse a source library, queue files for processing, toggle each stage on
-or off, pick a content-type preset, and watch per-stage progress and encoder logs update live as a
-job runs.
+The dashboard has two tabs:
+
+- **Library** — browse one or more source roots (NAS shares, local folders), pick a workflow, see
+  which files that workflow has already processed, preview each file's output path, and queue the
+  selection.
+- **Queue** — reorder, pause/resume, abort, rerun or retry jobs, and watch per-stage progress,
+  frame/ETA stats and encoder logs update live. **Retry / continue from checkpoint** resumes a
+  failed job from its last completed stage (or, for generative upscales, its last saved segment).
 
 ## Stages
 
@@ -24,7 +29,33 @@ tools/settings it will use.
 
 Each stage is independently toggleable, and a content type (Live Action, 2D Graphics,
 3D Graphics, Mixed — or Auto-Detect, which classifies each file with a CLIP-based detector) plus an
-"Allow Generative Tools" switch picks the tuned settings for that run.
+"Allow Generative Tools" switch picks the tuned settings for that run. With generative tools on,
+the upscale runs Topaz's Starlight diffusion models through `neuroserver.exe`. The source is cut into
+segments at black frames and each one is checkpointed to disk, so a multi-day job survives a crash,
+pause or reboot.
+
+## Workflows and per-folder settings
+
+Any source folder can contain a `.ai-remaster-pipeline.settings.json` that defines named workflows
+(stage toggles, content type, crop, temp/milestone/output folders, and an output filename template).
+Settings are inherited from parent folders unless a file sets `ignore_parent_settings`. A workflow
+defined in a folder is merged over the workflow of the same name from its parents. Templates use
+`${...}` variables such as `${dir-source}`, `${workflow-tag}` and `${output-vresmode}`, plus `$1`..`$9`
+groups from the base filename regex. The default produces names like `Title [Upscaled 1080p].mkv`.
+See the docstring at the top of [app/library.py](app/library.py) for the full syntax. The Library
+tab's root folders are stored in `library.json`.
+
+Finished files are always delivered as Matroska, tagged with the source path and the workflow that
+produced them. That's how the Library recognizes already-processed files.
+
+## Staging
+
+Each job copies its source to a local staging folder before processing: the workflow's temp
+folder if it has room, otherwise the first drive in `config.json`'s `staging_drives` that has room.
+Staging on FAT32 is refused because of its 4 GiB file-size limit. Intermediate files are deleted
+at each stage boundary once they are no longer needed for a retry. Staging can be a RAM disk, but
+it's wiped on reboot, so generative checkpoints go to `checkpoint_root` / the workflow's
+milestone folder instead.
 
 ## Requirements
 
@@ -32,7 +63,9 @@ Each stage is independently toggleable, and a content type (Live Action, 2D Grap
   pipeline drives Topaz's bundled ffmpeg using hardware `*_nvenc`/`*_cuvid` codecs exclusively;
   there's no software encode/decode fallback.
 - **[Python 3.10+](https://www.python.org/downloads/)**, with `pip install -r requirements.txt`
-  (FastAPI, Uvicorn, Jinja2).
+  (FastAPI/Uvicorn for the server, and open_clip + a CPU build of PyTorch for content-type
+  auto-detection — `pip install torch --index-url https://download.pytorch.org/whl/cpu` keeps
+  the download small).
 - **[Topaz Video AI](https://www.topazlabs.com/topaz-video)**, with an active paid subscription —
   optional; only needed if you enable the Upscale, Remove Blur and/or Remove Halo stages (all use Topaz models, and
   every one of them requires a subscription; there is no perpetual-license tier that unlocks them).
@@ -62,8 +95,14 @@ python -m app.server          # starts the server at http://127.0.0.1:8756
 start_pipeline.bat            # same, plus opens the dashboard in Brave
 ```
 
-There's no build step or automated test suite — verify changes by starting the server and running
-a short clip through the dashboard.
+There's no build step. Unit tests cover the library/workflow logic, staging and pre-flight checks:
+
+```bash
+python -m unittest discover -s tests
+```
+
+Anything touching the actual video tools still needs to be checked by running a short clip through
+the dashboard.
 
 ## Notes
 
