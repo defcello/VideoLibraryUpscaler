@@ -38,6 +38,8 @@ STAGE = "upscaled"
 
 FFMPEG = CONFIG["tools"]["ffmpeg"]
 FFPROBE = CONFIG["tools"]["ffprobe"]
+_EOF_PAD_SECONDS = 2
+_EOF_TOLERANCE_SECONDS = 0.25
 NEUROSERVER = CONFIG["tools"].get("neuroserver")
 
 
@@ -104,6 +106,14 @@ def run(job_id: str) -> None:
                           f"(model={preset['model']}, scale passes={scale_passes or 'none'}, then exact resize)")
 
     filters = [color_tag_filter(src, height)]
+    # Topaz's ffmpeg intermittently access-violates (0xC0000005) while
+    # tvai_up flushes its buffered frames at EOF -- seen with chained 2x
+    # passes dying ~1s before the end of an otherwise finished encode. Pad
+    # the tail with cloned frames so that flush only ever covers throwaway
+    # padding, and cut the output back to the source duration with -t so
+    # the muxer finishes (trailer written) before the filters reach EOF.
+    src_duration = settings.get("duration") or _current_duration(src)
+    filters.append(f"tpad=stop_mode=clone:stop_duration={_EOF_PAD_SECONDS}")
     if preset.get("precleanup", {}).get("enabled"):
         pc = preset["precleanup"]
         pc_params = {"model": pc["model"], "scale": 1, **pc["params"]}
@@ -144,10 +154,23 @@ def run(job_id: str) -> None:
         "-cq", str(preset["encoder"]["cq"]),
         "-profile:v", preset["encoder"]["profile"],
         "-c:a", preset["encoder"]["audio_mode"],
+        "-t", f"{src_duration:.3f}",
         str(out_path),
     ]
-    run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]},
-               progress=ffmpeg_time_progress(settings.get("duration")))
+    try:
+        run_logged(job_id, STAGE, cmd, extra_env={"TVAI_MODEL_DIR": CONFIG["tvai_model_dir"]},
+                   progress=ffmpeg_time_progress(settings.get("duration")))
+    except CommandError as exc:
+        # A crash during filter teardown after the output was fully written
+        # is harmless; accept it only if the file probes as complete.
+        try:
+            out_duration = _current_duration(out_path) if out_path.exists() else 0.0
+        except Exception:
+            out_duration = 0.0
+        if out_duration < src_duration - _EOF_TOLERANCE_SECONDS:
+            raise
+        db.log(job_id, STAGE, f"WARNING: ffmpeg exited {exc.returncode} after writing a complete "
+                              f"output ({out_duration:.2f}s of {src_duration:.2f}s) -- accepting it")
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise RuntimeError("upscale stage produced no output file")
