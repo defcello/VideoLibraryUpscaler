@@ -171,7 +171,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "allow_generative" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN allow_generative INTEGER NOT NULL DEFAULT 0")
     if "replace_existing" not in cols:
-        conn.execute("ALTER TABLE jobs ADD COLUMN replace_existing INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE jobs ADD COLUMN replace_existing INTEGER NOT NULL DEFAULT 1")
     if "completed_at" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN completed_at REAL")
         # Best-effort backfill for jobs already 'done' before this column
