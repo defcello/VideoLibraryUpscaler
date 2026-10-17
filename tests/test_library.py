@@ -114,12 +114,26 @@ class PlanAndStatusTests(unittest.TestCase):
         self.assertTrue(status[str(self.src)]["completed"])
         self.assertEqual(status[str(self.src)]["via"], "filename")
 
+    def test_renamed_source_and_output_still_match_by_filename(self):
+        out = Path(self.temp.name) / "Ep1 [DVD] [Up 1080p].mkv"
+        out.write_bytes(b"y")
+        tags = {"SOURCE_FILE": "Ep1 old.mkv", "SOURCE_PATH": str(self.dir / "Ep1 old.mkv"),
+                "WORKFLOW_STAGES": "deinterlace,upscale", "WORKFLOW_TAG": "Up"}
+        with patch.object(library, "probe_media", return_value={"tags": tags}):
+            status = library.completion_status([str(self.src)], self.wf, str(self.dir))[str(self.src)]
+            self.assertEqual(status.get("via"), "filename")
+            (self.dir / "Ep1 old.mkv").write_bytes(b"x")  # recorded source still exists -> someone else's output
+            self.assertFalse(library.completion_status([str(self.src)], self.wf, str(self.dir))[str(self.src)]["completed"])
+
     def test_metadata_match_requires_same_stages(self):
         out = Path(self.temp.name) / "renamed.mkv"
         out.write_bytes(b"y")
         tags = {"SOURCE_FILE": self.src.name, "WORKFLOW_STAGES": "deinterlace", "WORKFLOW_TAG": "Up"}
         with patch.object(library, "probe_media", return_value={"tags": tags}):
-            self.assertFalse(library.completion_status([str(self.src)], self.wf, str(self.dir))[str(self.src)]["completed"])
+            first = library.completion_status([str(self.src)], self.wf, str(self.dir))[str(self.src)]
+            self.assertFalse(first["completed"])
+            self.assertTrue(first["different"])
+            self.assertIn("stages", first["reason"])
             tags["WORKFLOW_STAGES"] = "deinterlace,upscale"
             status = library.completion_status([str(self.src)], self.wf, str(self.dir))[str(self.src)]
         self.assertEqual(status["via"], "metadata")

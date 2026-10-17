@@ -5,9 +5,13 @@ upscaling workflow: **normalize to progressive** → optional **remove noise/gra
 optional **remove halo** → **AI upscale** → **finalize**. A FastAPI backend runs jobs from a SQLite-backed queue on a background
 worker thread; a plain-JS dashboard (no build step) shows live progress over SSE.
 
-![Dashboard screenshot](docs/dashboard.png)
+The dashboard has two tabs and follows your system's light/dark setting:
 
-The dashboard has two tabs:
+| | Dark | Light |
+|---|---|---|
+| **Library** | ![Library tab, dark mode](docs/Screenshot-Library-Dark.png) | ![Library tab, light mode](docs/Screenshot-Library-Light.png) |
+| **Queue** | ![Queue tab, dark mode](docs/Screenshot-Queue-Dark.png) | ![Queue tab, light mode](docs/Screenshot-Queue-Light.png) |
+
 
 - **Library** — browse one or more source roots (NAS shares, local folders), pick a workflow, see
   which files that workflow has already processed, preview each file's output path, and queue the

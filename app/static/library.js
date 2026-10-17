@@ -239,20 +239,20 @@ async function saveWorkflowChanges() {
 }
 
 async function saveWorkflowAs() {
-    const name = $("wf-saveas-input").value.trim();
+    const name = $("wf-name-input").value.trim();
     if (!name) { alert("Enter a name for the new workflow."); return; }
     if (lib.settings.workflows[name] && !confirm(`"${name}" already exists here -- overwrite it in this directory's settings file?`)) return;
     if (await workflowAction("save", name, { fields: getFormWorkflow() })) {
-        $("wf-saveas-input").value = "";
+        $("wf-name-input").value = "";
         afterWorkflowEdit(name);
     }
 }
 
 async function renameWorkflow() {
-    const newName = $("wf-rename-input").value.trim();
+    const newName = $("wf-name-input").value.trim();
     if (!newName) { alert("Enter the new name."); return; }
     if (await workflowAction("rename", lib.wfName, { new_name: newName })) {
-        $("wf-rename-input").value = "";
+        $("wf-name-input").value = "";
         afterWorkflowEdit(newName);
     }
 }
@@ -269,11 +269,13 @@ async function loadFiles() {
     const dir = lib.dir;
     const recursive = $("include-subdirs").checked;
     $("lib-files").innerHTML = `<div class="lib-empty">loading…</div>`;
+    setScanning(true);
     let data;
     try {
         data = await api(`/api/library/files?path=${encodeURIComponent(dir)}&recursive=${recursive}`);
     } catch (e) {
         $("lib-files").innerHTML = `<div class="lib-empty">${escapeHtml(e.message)}</div>`;
+        setScanning(false);
         return;
     }
     if (dir !== lib.dir || recursive !== $("include-subdirs").checked) return;  // superseded
@@ -296,6 +298,63 @@ function compileFilter(id) {
     }
 }
 
+// Status legend under the file list: per status, a show/hide toggle (which
+// statuses' video files appear at all) and a tri-state select-all scoped to
+// that status. Hidden statuses are a per-viewer convenience kept in localStorage.
+const STATUS_LEGEND = [
+    ["none", "not processed", "Not processed by this workflow"],
+    ["pending", "queued", "Waiting in the queue"],
+    ["running", "processing", "Being processed right now"],
+    ["done", "done", "Output exists and matches this workflow"],
+    ["different", "different", "An output exists, but it was made with different settings than this workflow"],
+    ["failed", "failed", "The last job for this file failed"],
+];
+const EYE_OPEN = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const EYE_SHUT = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+let hiddenStatuses = new Set();
+try { hiddenStatuses = new Set(JSON.parse(localStorage.getItem("libraryHiddenStatuses") || "[]")); } catch (e) { /* ignore */ }
+
+function initLegend() {
+    $("lib-legend").innerHTML = STATUS_LEGEND.map(([cls, label, tip]) =>
+        `<span class="legend-item" data-status="${cls}" title="${escapeHtml(tip)}">
+            <input type="checkbox" class="legend-select">
+            <button class="legend-eye" title="Show/hide ${escapeHtml(label)} files"></button>
+            <span class="st-${cls}">${escapeHtml(label)}</span>
+        </span>`).join("");
+    for (const item of document.querySelectorAll(".legend-item")) {
+        const cls = item.dataset.status;
+        item.querySelector(".legend-eye").onclick = () => {
+            if (hiddenStatuses.has(cls)) hiddenStatuses.delete(cls); else hiddenStatuses.add(cls);
+            try { localStorage.setItem("libraryHiddenStatuses", JSON.stringify([...hiddenStatuses])); } catch (e) { /* ignore */ }
+            renderFiles();
+        };
+        item.querySelector(".legend-select").onclick = (e) => {
+            const paths = visibleFiles().filter(f => isSelectable(f) && fileState(f.path).cls === cls).map(f => f.path);
+            const all = paths.length && paths.every(p => lib.selected.has(p));
+            for (const p of paths) { if (all) lib.selected.delete(p); else lib.selected.add(p); }
+            renderFiles();
+        };
+    }
+}
+
+function renderLegend(files) {
+    for (const item of document.querySelectorAll(".legend-item")) {
+        const cls = item.dataset.status;
+        const hidden = hiddenStatuses.has(cls);
+        const paths = files.filter(f => isSelectable(f) && fileState(f.path).cls === cls).map(f => f.path);
+        const n = paths.filter(p => lib.selected.has(p)).length;
+        const cb = item.querySelector(".legend-select");
+        cb.checked = paths.length > 0 && n === paths.length;
+        cb.indeterminate = n > 0 && n < paths.length;
+        cb.disabled = !paths.length;
+        cb.title = `Select all ${STATUS_LEGEND.find(s => s[0] === cls)[1]} files (${paths.length})`;
+        const eye = item.querySelector(".legend-eye");
+        eye.innerHTML = hidden ? EYE_SHUT : EYE_OPEN;
+        eye.classList.toggle("off", hidden);
+        item.classList.toggle("hidden-status", hidden);
+    }
+}
+
 function visibleFiles() {
     const showRx = compileFilter("show-regex") || /.*/;
     const hideRx = compileFilter("hide-regex") || /(?!)/;
@@ -306,6 +365,7 @@ function visibleFiles() {
         if (!showRx.test(f.name)) continue;
         const hidden = hideRx.test(f.name);
         if (hidden && !showHidden) continue;
+        if (f.is_video && hiddenStatuses.size && hiddenStatuses.has(fileState(f.path).cls)) continue;
         out.push({ ...f, hiddenByFilter: hidden });
     }
     return out;
@@ -319,6 +379,7 @@ function fileState(path) {
     if (job && ACTIVE_JOB_STATUSES.includes(job.status)) return { cls: "pending", job };
     const c = lib.completion[path];
     if (c && c.completed) return { cls: "done", info: c };
+    if (c && c.different) return { cls: "different", info: c };
     if (job && job.status === "failed") return { cls: "failed", job };
     return { cls: "none" };
 }
@@ -352,6 +413,7 @@ function statusTitle(state) {
     }
     if (state.cls === "pending") return `In queue (${state.job.status.replace(/_/g, " ")})`;
     if (state.cls === "done") return `Done for this workflow (matched by ${state.info.via}): ${state.info.output}`;
+    if (state.cls === "different") return `Output exists but doesn't match this workflow (${state.info.reason}): ${state.info.output}`;
     if (state.cls === "failed") return `Last job failed: ${state.job.error_message || ""}`.trim();
     return "Not processed by this workflow";
 }
@@ -400,10 +462,12 @@ function renderFiles() {
             if (e.target !== cb) cb.checked = !cb.checked;
             if (cb.checked) lib.selected.add(row.dataset.path); else lib.selected.delete(row.dataset.path);
             renderSelectAll(selectable);
+            renderLegend(files);
             refreshPreviewSoon();
         };
     }
     renderSelectAll(selectable);
+    renderLegend(files);
     const key = [...lib.selected].join("|");
     if (key !== lastSelectionKey) {
         lastSelectionKey = key;
@@ -429,11 +493,19 @@ function toggleSelectAll() {
     renderFiles();
 }
 
+// "Scanning..." drawer at the bottom of the file list: shown from the moment
+// the colors go stale (a status refresh is scheduled or a listing reloads)
+// until the latest status request comes back.
+function setScanning(on) {
+    $("lib-scanning").classList.toggle("open", on);
+}
+
 let statusSeq = 0;
 async function refreshStatus() {
     const seq = ++statusSeq;
     const paths = lib.files.filter(f => f.is_video).map(f => f.path);
-    if (!paths.length || !lib.settings) return;
+    if (!paths.length || !lib.settings) { setScanning(false); return; }
+    setScanning(true);
     try {
         const res = await jsonApi("/api/library/status", "POST", {
             paths, workflow: getFormWorkflow(), workflow_dir: workflowDir(), workflow_name: lib.wfName,
@@ -441,9 +513,17 @@ async function refreshStatus() {
         if (seq !== statusSeq) return;
         lib.completion = res;
         renderFiles();
-    } catch (e) { /* transient -- the next form change or job update retries */ }
+    } catch (e) {
+        /* transient -- the next form change or job update retries */
+    } finally {
+        if (seq === statusSeq) setScanning(false);
+    }
 }
-const refreshStatusSoon = debounce(refreshStatus, 500);
+const refreshStatusDebounced = debounce(refreshStatus, 500);
+function refreshStatusSoon() {
+    setScanning(true);
+    refreshStatusDebounced();
+}
 
 // Live job overlay from the SSE stream (app.js connectStream).
 window.libraryOnJobs = function (jobs) {
@@ -670,6 +750,7 @@ function initInsertMenus() {
 
 async function initLibrary() {
     initInsertMenus();
+    initLegend();
     for (const btn of document.querySelectorAll(".info-btn")) {
         btn.onclick = (e) => { e.preventDefault(); const box = $(btn.dataset.info); box.hidden = !box.hidden; };
     }
@@ -686,12 +767,14 @@ async function initLibrary() {
     $("wf-saveas-btn").onclick = saveWorkflowAs;
     $("wf-rename-btn").onclick = renameWorkflow;
     $("wf-delete-btn").onclick = deleteWorkflow;
-    $("lib-select-all").onclick = (e) => { e.preventDefault(); toggleSelectAll(); };
+    $("lib-select-all").onclick = toggleSelectAll;  // renderFiles then sets the real tri-state
     $("show-full-path").onchange = renderPreview;
     $("add-to-queue").onclick = addToQueue;
     $("lib-path-form").onsubmit = (e) => { e.preventDefault(); navigate($("lib-path").value.trim()); };
     $("lib-add-root").onclick = () => saveRoots([...lib.roots, lib.dir]);
     $("lib-remove-root").onclick = () => saveRoots(lib.roots.filter(r => normPath(r) !== normPath(lib.dir)));
+    $("lib-refresh-dirs").onclick = () => navigate(lib.dir);
+    $("lib-refresh-files").onclick = () => loadFiles();
     $("es-save").onclick = saveEditSettings;
     $("es-revert").onclick = revertEditSettings;
     $("es-reset").onclick = () => { lib.esDraft = {}; renderEditSettings(); };

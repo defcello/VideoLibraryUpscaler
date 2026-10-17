@@ -535,20 +535,37 @@ def completion_status(paths: list[str], wf: dict, workflow_dir: str) -> dict[str
     processing-history metadata embedded in videos in the workflow's output
     directory (finalize.py's SOURCE_FILE / WORKFLOW_* tags -- older outputs
     are matched on their per-stage tags); then the predicted filename with
-    `${output-vresmode}` as a wildcard."""
+    `${output-vresmode}` as a wildcard.
+
+    A source with an existing output whose recorded settings don't match the
+    workflow (different stage set or tag) gets `different: True` plus a
+    `reason` instead -- unless a matching output is also found."""
     stages = workflow_stages(wf)
     tag = wf.get("workflow_tag") or ""
     result = {p: {"completed": False} for p in paths}
     by_norm = {_norm(p): p for p in paths}
 
+    def mismatch(p: str, found_stages, found_tag) -> Optional[str]:
+        reasons = []
+        if found_stages is not None and tuple(found_stages) != stages:
+            reasons.append(f"stages {_fmt_stages(found_stages)} (workflow: {_fmt_stages(stages)})")
+        if found_tag is not None and found_tag != tag:
+            reasons.append(f"tag {found_tag!r} (workflow: {tag!r})")
+        return "; ".join(reasons) or None
+
+    def note_different(p: str, output: str, reason: str, via: str) -> None:
+        if not result[p]["completed"] and not result[p].get("different"):
+            result[p] = {"completed": False, "different": True, "via": via, "output": output, "reason": reason}
+
     for job in db.list_jobs("done"):
         p = by_norm.get(_norm(job["original_nas_path"]))
-        if not p or result[p]["completed"] or job_stages(job) != stages:
-            continue
-        if job["workflow_tag"] is not None and job["workflow_tag"] != tag:
-            continue
         out = job["current_file"]
-        if out and os.path.exists(out):
+        if not p or result[p]["completed"] or not out or _norm(out) == _norm(p) or not os.path.exists(out):
+            continue
+        reason = mismatch(p, job_stages(job), job["workflow_tag"])
+        if reason:
+            note_different(p, out, reason, "job")
+        else:
             result[p] = {"completed": True, "via": "job", "output": out}
 
     plans = {}
@@ -585,9 +602,9 @@ def completion_status(paths: list[str], wf: dict, workflow_dir: str) -> dict[str
                 continue
             if tags.get("SOURCE_PATH") and _norm(tags["SOURCE_PATH"]) != _norm(p):
                 continue
-            if _tags_stages(tags) != stages:
-                continue
-            if tags.get("WORKFLOW_TAG") is not None and tags["WORKFLOW_TAG"] != tag:
+            reason = mismatch(p, _tags_stages(tags), tags.get("WORKFLOW_TAG"))
+            if reason:
+                note_different(p, c, reason, "metadata")
                 continue
             result[p] = {"completed": True, "via": "metadata", "output": c}
             break
@@ -596,21 +613,38 @@ def completion_status(paths: list[str], wf: dict, workflow_dir: str) -> dict[str
         marker = "VRESMODE0MARKER"
         pattern = re.escape(safe_filename(expand(tmpl, {"output-vresmode": marker}))).replace(marker, r"\d+[ip]")
         patterns = [re.compile(f"^{pattern}$", re.IGNORECASE)]
-        legacy = _legacy_name_pattern(src, stages)
-        if legacy:
-            patterns.append(legacy)
+        # Any legacy-named output (upscaled or not) is at least a candidate for
+        # "different"; only the one matching this workflow's stages can complete it.
+        patterns += [_legacy_name_pattern(src, stages), _legacy_name_pattern(src, ("upscale",)),
+                     _legacy_name_pattern(src, ())]
         for n in listings.get(out_dir, []):
             c = os.path.join(out_dir, n)
             if _norm(c) == _norm(p) or not any(rx.match(n) for rx in patterns):
                 continue
             # A name match only counts if the file's own processing metadata
-            # (when it has any) doesn't say a different stage set made it.
-            found = _tags_stages((meta.get(c) or {}).get("tags") or {})
-            if found is not None and found != stages:
+            # (when it has any) doesn't say different settings made it.
+            tags = (meta.get(c) or {}).get("tags") or {}
+            # A recorded source that differs from p disqualifies the match only
+            # if it still exists -- if it's gone, source and output were most
+            # likely renamed/moved together after processing.
+            recorded = tags.get("SOURCE_PATH")
+            if recorded and _norm(recorded) != _norm(p) and os.path.exists(recorded):
+                continue
+            reason = mismatch(p, _tags_stages(tags), tags.get("WORKFLOW_TAG"))
+            if reason:
+                note_different(p, c, reason, "filename")
+                continue
+            if not patterns[0].match(n) and not patterns[1].match(n):
+                # Legacy name for some other stage set, and no metadata to say otherwise.
+                note_different(p, c, "existing output is named for a different stage set", "filename")
                 continue
             result[p] = {"completed": True, "via": "filename", "output": c}
             break
     return result
+
+
+def _fmt_stages(stages) -> str:
+    return "+".join(stages) or "none"
 
 
 def _legacy_name_pattern(src: Path, stages: tuple[str, ...]) -> Optional[re.Pattern]:

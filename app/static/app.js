@@ -236,7 +236,25 @@ function runningEta(job) {
         const time = eta.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         etaText = sameDay ? time : eta.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + time;
     }
-    return { pct, framesText, etaText };
+    return { pct, framesText, etaText, remainingSecs };
+}
+
+// Queue's "Finished" column: completion time for done jobs; for a running
+// job, now + the running stage's remaining time. Only the running stage has a
+// measured rate, so when enabled processing stages still follow it the
+// estimate is a lower bound ("≥"); the trailing finalize remux is negligible.
+function finishedCell(job) {
+    const fmt = secs => new Date(secs * 1000).toLocaleString([], {
+        month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+    if (job.status === "done") return job.completed_at ? fmt(job.completed_at) : "";
+    if (job.status !== "running") return "";
+    const { remainingSecs } = runningEta(job);
+    if (remainingSecs == null) return "(Est. —)";
+    const runIdx = runningStageIndex(job);
+    const laterWork = STAGES.some((s, i) => i > runIdx && s !== "finalized" && !isStageSkipped(job, i));
+    const title = laterWork ? "End of the current stage; later stages will add more time" : "Estimated from the current stage's rate";
+    return `<span title="${title}">(Est. ${laterWork ? "≥ " : ""}${fmt(Date.now() / 1000 + remainingSecs)})</span>`;
 }
 
 function statusLabel(job) {
@@ -355,6 +373,7 @@ function renderJobs(jobs) {
             <td><div class="stage-track">${stageTrack(job)}</div></td>
             <td style="color:var(--text-dim);font-size:12px">${settingsSummary(job)}</td>
             <td style="color:var(--text-dim);font-size:12px">${new Date(job.updated_at * 1000).toLocaleString()}</td>
+            <td style="color:var(--text-dim);font-size:12px">${finishedCell(job)}</td>
             <td>
                 <button class="small delete-btn" title="${isRunning ? "Abort and delete this job" : "Delete this record"}">${TRASH_ICON}</button>
             </td>

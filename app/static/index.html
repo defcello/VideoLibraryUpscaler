@@ -32,17 +32,20 @@
         </div>
         <div class="lib-subhead">Roots</div>
         <div class="lib-list" id="lib-roots"></div>
-        <div class="lib-subhead">Folders</div>
+        <div class="lib-subhead">Folders <button class="refresh-btn" id="lib-refresh-dirs" title="Refresh folders">&#8635;</button></div>
         <div class="lib-list lib-dirs" id="lib-dirs"></div>
     </section>
 
     <!-- Column 2: file list -->
     <section class="lib-pane lib-files">
-        <h2>Files</h2>
+        <h2>Files <button class="refresh-btn" id="lib-refresh-files" title="Refresh files and their status">&#8635;</button></h2>
         <div class="file-head">
             <label class="checkbox"><input type="checkbox" id="lib-select-all"> <span id="lib-select-count">Select all</span></label>
         </div>
-        <div class="lib-list file-list" id="lib-files"></div>
+        <div class="file-list-wrap">
+            <div class="lib-list file-list" id="lib-files"></div>
+            <div class="scan-drawer" id="lib-scanning" aria-live="polite"><span class="spinner"></span>Scanning… colors are being updated</div>
+        </div>
         <div class="file-filters">
             <div class="field">
                 <label for="show-regex">Show files (regex)</label>
@@ -55,13 +58,7 @@
             <label class="checkbox"><input type="checkbox" id="include-subdirs" data-wf="include_subdirs"> Include files from subdirectories</label>
             <label class="checkbox"><input type="checkbox" id="show-all" data-wf="show_all"> Show all files</label>
             <label class="checkbox"><input type="checkbox" id="show-hidden" data-wf="show_hidden"> Show hidden files</label>
-            <div class="legend">
-                <span class="st-none">not processed</span>
-                <span class="st-pending">queued</span>
-                <span class="st-running">processing</span>
-                <span class="st-done">done</span>
-                <span class="st-failed">failed</span>
-            </div>
+            <div class="legend" id="lib-legend"></div>
         </div>
     </section>
 
@@ -78,13 +75,10 @@
             <details class="wf-edit" id="wf-edit">
                 <summary>Edit Workflow</summary>
                 <div class="inline-row">
-                    <input type="text" id="wf-rename-input" placeholder="New name">
+                    <input type="text" id="wf-name-input" placeholder="Name (for Rename / Save As New)">
                     <button class="small" id="wf-rename-btn">Rename</button>
-                    <button class="small danger" id="wf-delete-btn">Delete</button>
-                </div>
-                <div class="inline-row">
-                    <input type="text" id="wf-saveas-input" placeholder="New workflow name">
                     <button class="small" id="wf-saveas-btn">Save As New</button>
+                    <button class="small danger" id="wf-delete-btn">Delete</button>
                 </div>
                 <div class="inline-row">
                     <button class="small primary" id="wf-save-btn">Save Changes</button>
@@ -223,9 +217,10 @@
                     <th style="width:6%">#</th>
                     <th style="width:24%">File</th>
                     <th style="width:11%">Status</th>
-                    <th style="width:22%">Stage</th>
-                    <th style="width:17%">Settings</th>
-                    <th style="width:16%">Updated</th>
+                    <th style="width:19%">Stage</th>
+                    <th style="width:14%">Settings</th>
+                    <th style="width:13%">Updated</th>
+                    <th style="width:13%">Finished</th>
                     <th style="width:4%"></th>
                 </tr>
             </thead>
