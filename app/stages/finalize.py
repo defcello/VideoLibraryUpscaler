@@ -129,7 +129,13 @@ def run(job_id: str) -> None:
         raise RuntimeError("finalize metadata remux produced no output file")
 
     dest_dir = Path(job["output_dir"] or Path(job["original_nas_path"]).parent)
-    dest_path = _unique_destination(dest_dir / final_name)
+    dest_path = dest_dir / final_name
+    if job["replace_existing"]:
+        if dest_path.exists():
+            db.log(job_id, STAGE, f"replacing existing file: {dest_path}")
+            dest_path.unlink()
+    else:
+        dest_path = _unique_destination(dest_path)
 
     db.log(job_id, STAGE, f"moving {remuxed} -> {dest_path}")
     dest_dir.mkdir(parents=True, exist_ok=True)

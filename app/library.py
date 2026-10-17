@@ -83,6 +83,7 @@ def app_default_workflow() -> dict:
         "dehalo_enabled": False,
         "upscale_enabled": True,
         "allow_generative": False,
+        "replace_existing": True,
         "content_type": load_preset("content_types")["default"],
     }
 

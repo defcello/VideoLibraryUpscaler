@@ -228,6 +228,7 @@ def api_rerun_job(job_id: str):
         # An 'auto' job re-detects in the new job's own probe stage.
         content_type=row["content_type"],
         allow_generative=bool(row["allow_generative"]),
+        replace_existing=bool(row["replace_existing"]),
         skip_upscale=bool(row["skip_upscale"]),
         crop_start_seconds=row["crop_start_seconds"],
         crop_end_seconds=row["crop_end_seconds"],
@@ -480,6 +481,7 @@ def api_library_queue(req: LibraryPathsRequest):
             topaz_preset=resolved["topaz_preset"],
             content_type=wf["content_type"],
             allow_generative=bool(wf["allow_generative"]),
+            replace_existing=bool(wf["replace_existing"]),
             skip_upscale=not wf["upscale_enabled"],
             crop_start_seconds=crop_start,
             crop_end_seconds=crop_end,

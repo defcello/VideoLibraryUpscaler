@@ -170,6 +170,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN content_type TEXT")
     if "allow_generative" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN allow_generative INTEGER NOT NULL DEFAULT 0")
+    if "replace_existing" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN replace_existing INTEGER NOT NULL DEFAULT 0")
     if "completed_at" not in cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN completed_at REAL")
         # Best-effort backfill for jobs already 'done' before this column
@@ -196,6 +198,7 @@ def create_job(
     crop_end_seconds: Optional[float] = None,
     content_type: Optional[str] = None,
     allow_generative: bool = False,
+    replace_existing: bool = False,
     **workflow: Optional[str],
 ) -> str:
     unknown = set(workflow) - set(WORKFLOW_COLUMNS)
@@ -215,14 +218,14 @@ def create_job(
                 id, original_nas_path, original_filename, working_name,
                 stage, status, settings_json,
                 deinterlace_enabled, denoise_enabled, denoise_tune, deblur_enabled, dehalo_enabled,
-                topaz_preset, content_type, allow_generative, skip_upscale,
+                topaz_preset, content_type, allow_generative, replace_existing, skip_upscale,
                 crop_start_seconds, crop_end_seconds, queue_order,
                 created_at, updated_at, {", ".join(WORKFLOW_COLUMNS)}
-            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{{}}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{", ?" * len(WORKFLOW_COLUMNS)})""",
+            ) VALUES (?, ?, ?, ?, 'queued', 'pending', '{{}}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{", ?" * len(WORKFLOW_COLUMNS)})""",
             (
                 job_id, original_nas_path, original_filename, working_name,
                 int(deinterlace_enabled), int(denoise_enabled), denoise_tune, int(deblur_enabled), int(dehalo_enabled),
-                topaz_preset, content_type, int(allow_generative), int(skip_upscale),
+                topaz_preset, content_type, int(allow_generative), int(replace_existing), int(skip_upscale),
                 crop_start_seconds, crop_end_seconds, next_order,
                 now, now, *(workflow.get(c) for c in WORKFLOW_COLUMNS),
             ),
