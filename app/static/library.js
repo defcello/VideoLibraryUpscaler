@@ -593,9 +593,12 @@ function renderPreview() {
 
 async function addToQueue() {
     const conflicts = lib.preview.filter(p => p.conflict);
+    const replacing = !!getFormWorkflow().replace_existing;
     if (conflicts.length && !confirm(`${conflicts.length} output(s) look like they'll conflict:\n\n`
         + conflicts.slice(0, 8).map(p => `${p.output_path.split(/[\\/]/).pop()} — ${p.conflict}`).join("\n")
-        + `\n\nQueue anyway? (Existing files are never overwritten; the new output gets a " (2)" suffix.)`)) return;
+        + (replacing
+            ? `\n\nQueue anyway? ("Replace Existing File" is on: existing files will be overwritten.)`
+            : `\n\nQueue anyway? (Existing files won't be overwritten; the new output gets a " (2)" suffix.)`))) return;
     const btn = $("add-to-queue");
     btn.disabled = true;
     try {
